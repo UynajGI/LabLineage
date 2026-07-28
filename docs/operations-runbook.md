@@ -1,0 +1,139 @@
+# LabLineage Guardian 运行手册
+
+## 健康、指标与追踪
+
+- 存活检查：`GET /api/health`，无需身份令牌。
+- 就绪检查：`GET /api/ready`，会实际刷新存储；数据库不可用时返回 503。
+- 能力状态：`GET /v1/capabilities`，显示实际配置，不返回模拟成功。
+- Prometheus 指标：`GET /v1/metrics`，要求 `admin` 角色。
+- 每个响应携带 `x-request-id`。服务日志为单行 JSON，记录请求 ID、主体、路由、状态和耗时，不记录令牌或请求正文。
+- 设置 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 后启用 OTLP/HTTP Trace；未设置时不发送任何遥测。
+- Prometheus 规则位于 `deploy/prometheus-alerts.yml`。
+
+## 部署
+
+1. 为 PostgreSQL 迁移和应用运行分别创建身份；应用身份不得拥有 DDL 权限。
+2. 设置 `DATABASE_URL`，用迁移身份运行 `npm run migrate`。
+3. 用迁移身份预置租户；为应用设置 `LABLINEAGE_TENANT_ID`、slug、OIDC issuer、audience 和 JWKS URL。生产运行身份不得启用 `LABLINEAGE_ALLOW_TENANT_BOOTSTRAP`。
+4. 配置受信 Collector SPKI 指纹，并在生产启用签名 Manifest。
+5. 部署不可变镜像，执行健康、认证、项目隔离和 Manifest 幂等检查。
+6. 验证 Agent 只暴露只读工具，并执行静态轨迹评测。
+
+## 备份与恢复
+
+- PostgreSQL 每日基础备份并开启 WAL 归档，至少保留 30 天。
+- 每月在隔离环境执行计时恢复演练，核对项目、artifact version、evidence 和最新 audit event 数量。
+- `.lablineage` JSON 只用于开发，不属于生产恢复目标。
+- Collector SQLite 是可重建缓存；签名 Bundle 是必须保留的交换证据。
+- 目标：RPO 24 小时，RTO 4 小时。试点前必须用真实云数据库完成一次恢复演练。
+
+创建带 SHA-256 校验文件的备份：
+
+```powershell
+.\scripts\backup-postgres.ps1 -OutputDirectory D:\lablineage-backups
+```
+
+恢复脚本会执行 `--clean`，必须显式输入目标数据库名以防误操作：
+
+```powershell
+.\scripts\restore-postgres.ps1 -BackupFile D:\lablineage-backups\lablineage-20260101-010101.dump -ConfirmDatabase lablineage
+```
+
+## 回滚
+
+1. 停止写流量，或将 Gateway 切换为只读。
+2. 回滚到上一个不可变镜像版本。
+3. 数据库迁移默认只前进；破坏性变更必须附独立回滚脚本并先通过恢复演练。
+4. 重新检查健康、认证、项目隔离、Manifest 幂等和 Agent 只读工具。
+
+## API unavailable
+
+1. 检查 `GET /api/health`、进程状态和 8788 端口。
+2. 检查 PostgreSQL 连接池、最近迁移和磁盘空间。
+3. 若刚发生热重启，确认日志出现 `API listening`；前端 GET 会在短暂窗口内自动退避重试。
+4. 超过两分钟仍未恢复时，回滚上一镜像并保留相关 Trace 和日志。
+
+## Elevated error rate
+
+1. 按 `traceId`、`requestId`、route 和 status 聚合 5xx。
+2. 检查数据库超时、OIDC/JWKS 失败、外部连接器限流和 Manifest 验证错误。
+3. 外部平台故障时关闭对应能力，不得伪造成功；核心谱系查询保持可用。
+
+## Elevated latency
+
+1. 区分 API、PostgreSQL、Vertex、GitHub 和 Workspace spans。
+2. 检查连接池饱和、慢查询和外部 API 429。
+3. 必要时暂停同步/Agent 非关键流量，优先保证只读谱系和审计查询。
+
+## Agent token spike
+
+1. 检查 `lablineage_agent_tokens_total` 的 model 和 input/output 方向。
+2. 按审计事件识别异常主体；必要时撤销其 token 或降级 Agent 能力。
+3. 保留请求元数据但不得记录完整提示词中的秘密。
+
+## Ingestion queue stalled
+
+1. Query `/v1/metrics` and confirm
+   `lablineage_ingestion_oldest_queued_seconds` and the queued/processing
+   gauges.
+2. Query `/v1/ingestion-jobs/{jobId}`. The response never exposes the durable
+   payload; inspect `attempts`, `nextAttemptAt`, `leaseExpiresAt`, and the safe
+   error object.
+3. If the owning process died, restart the API. Startup recovery requeues jobs
+   whose processing lease expired and resumes queued jobs from the durable
+   application state.
+4. If multiple instances are running, confirm their clocks and PostgreSQL
+   connectivity before intervening. Do not edit a live lease by hand.
+5. Escalate if a valid job remains queued for ten minutes after recovery.
+
+## Ingestion job failed
+
+1. Read the job's safe error and correlate its request/audit records. Raw
+   payloads are removed on terminal success or failure.
+2. Correct the manifest locally while preserving the original `bundle_id`.
+3. Call `POST /v1/ingestion-jobs/{jobId}/retry` with a new
+   `Idempotency-Key`, `confirmation: RETRY_INGESTION_JOB`, and the corrected
+   manifest.
+4. Poll the job until `completed` or `failed`. The previous safe error remains
+   in `errorHistory`; repeated server errors use bounded exponential retry and
+   a maximum of three automatic attempts.
+5. Disconnect the source if validation failures indicate a compromised or
+   misconfigured collector.
+
+## 凭据轮换与撤销
+
+- Google、GitHub、OIDC 和 Collector 凭据不得写入仓库或应用日志。
+- 轮换服务 token 时先加入新 SHA-256 摘要，再切换 Collector，最后删除旧摘要。
+- 撤销 Workspace 权限后，能力检查和实际调用必须明确失败，禁止伪造成功。
+- 发生泄漏时立即撤销凭据、保存审计日志、评估访问范围并生成事件报告。
+
+## 对象载荷故障
+
+1. 检查任务的 `payloadSha256`、对象存储可用性和 worker 结构化日志；API 不会
+   返回私有 object key。
+2. checksum mismatch 视为完整性事件，暂停该来源和自动重试，保留对象与审计
+   日志，检查 GCS generation/CRC32C。
+3. 本地开发对象位于 `LABLINEAGE_DATA_DIR/objects`，不得手工覆盖。生产运行
+   身份没有删除权限；清理由 Bucket retention/lifecycle 执行。
+4. 验证失败的 Bundle 只能通过显式 `RETRY_INGESTION_JOB` 和原 `bundle_id`
+   提交修正内容，新载荷使用新的不可变对象键。
+
+## 本地 Git 连接器
+
+- 设置以操作系统路径分隔符连接的 `LABLINEAGE_LOCAL_GIT_ROOTS`。
+- `403` 表示真实路径解析后不在允许根；不要通过放宽到磁盘根目录解决。
+- `422` 表示仓库、revision 或 Git 对象不可读取；使用扫描身份在命令行执行
+  `git -C <repo> rev-parse --verify HEAD` 验证。
+- 默认树上限 10,000，最大 100,000；`treeTruncated=true` 时缩小仓库范围或在
+  审批后提高该次请求上限。
+
+## GitHub Actions 部署
+
+1. Terraform 开启 `enable_github_deploy`，并把输出映射到受保护 GitHub
+   environment；不得创建长期 GCP JSON key。
+2. staging 自动部署还需设置 `ENABLE_STAGING_DEPLOY=true`；production 只允许
+   手动触发并经过 environment 审批。
+3. 工作流先更新/执行迁移 Job，再更新 Cloud Run。readiness 100 秒内不成功会
+   自动恢复上一个镜像。
+4. 回滚后核对迁移是否为向前兼容；数据库只能通过新的修复迁移前进，禁止回写
+   或删除已应用迁移。
