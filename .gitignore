@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+.env.local
+.lablineage/
+.reference/
+.playwright-cli/
+lablineage-guardian.zip
+coverage/
+*.log
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+playwright-report/
+test-results/
+.codemap/

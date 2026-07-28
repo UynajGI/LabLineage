@@ -1,0 +1,45 @@
+{
+  "name": "@lablineage/guardian-api",
+  "type": "module",
+  "private": true,
+  "version": "0.3.0",
+  "description": "Evidence store, scanner, audit engine, and Google ADK agent API.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env.local --import ./instrumentation.js server.js",
+    "dev": "node --watch --env-file-if-exists=.env.local --import ./instrumentation.js server.js",
+    "test": "node --test --test-concurrency=1",
+    "test:postgres": "node --test --test-concurrency=1 test/postgres-integration.test.js",
+    "seed": "node --env-file-if-exists=.env.local scripts/seed-demo.js",
+    "migrate": "node --env-file-if-exists=.env.local scripts/migrate.js",
+    "provision": "node --env-file-if-exists=.env.local scripts/provision-tenant.js",
+    "eval:agent": "node scripts/eval-agent.js",
+    "eval:agent:live": "node --env-file-if-exists=.env.local scripts/eval-agent.js --live",
+    "validate:deployment": "node scripts/validate-deployment.js",
+    "validate:openapi": "node scripts/validate-openapi.js",
+    "validate:migrations": "node scripts/validate-migrations.js",
+    "validate:idempotency": "node scripts/validate-idempotency.js"
+  },
+  "dependencies": {
+    "@google-cloud/storage": "^7.21.0",
+    "@google/adk": "^1.4.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.79.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.205.0",
+    "@opentelemetry/sdk-node": "^0.221.0",
+    "adm-zip": "^0.6.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "express-rate-limit": "^7.5.0",
+    "jose": "^6.1.0",
+    "pg": "^8.16.3",
+    "tar": "^7.5.22",
+    "undici": "^7.29.0",
+    "yaml": "^2.9.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
+    "@types/node": "^25.2.0"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "name": "lablineage-guardian-workspace",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "LabLineage Guardian frontend and Google ADK backend workspace.",
+  "workspaces": [
+    "frontend",
+    "backend",
+    "collector"
+  ],
+  "engines": {
+    "node": ">=22.15"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "npm run dev --workspace backend",
+    "dev:web": "wait-on http-get://127.0.0.1:8788/api/health && npm run dev --workspace frontend",
+    "start": "npm run start --workspace backend",
+    "build": "npm run build --workspace frontend",
+    "test": "npm run test --workspace backend",
+    "test:all": "npm run test --workspaces --if-present",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
+    "seed": "npm run seed --workspace backend",
+    "migrate": "npm run migrate --workspace backend",
+    "collector": "npm run start --workspace collector",
+    "verify:release": "node scripts/verify-release-evidence.mjs artifacts",
+    "validate:workflows": "node scripts/validate-workflows.mjs",
+    "hooks:install": "node scripts/install-git-hooks.mjs",
+    "verify:git": "npm run test:all && npm run build && npm run eval:agent --workspace backend && npm run validate:deployment --workspace backend && npm run validate:openapi --workspace backend && npm run validate:migrations --workspace backend && npm run validate:idempotency --workspace backend && npm run validate:workflows && npm run benchmark:ci --workspace collector",
+    "verify:push": "npm run verify:git && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@playwright/test": "^1.62.0",
+    "concurrently": "^9.2.0",
+    "wait-on": "^8.0.4"
+  },
+  "overrides": {
+    "@google/adk": {
+      "@mikro-orm/sqlite": {
+        "sqlite3": {
+          "node-gyp": {
+            "tar": "7.5.22"
+          },
+          "tar": "7.5.22"
+        }
+      },
+      "adm-zip": "0.6.0"
+    },
+    "adm-zip": "0.6.0",
+    "tar": "7.5.22"
+  }
+}

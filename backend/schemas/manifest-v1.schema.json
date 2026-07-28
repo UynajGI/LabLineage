@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lablineage.dev/schemas/manifest-v1.schema.json",
+  "title": "LabLineage Edge Manifest v1",
+  "type": "object",
+  "required": ["schema_version", "bundle_id", "project_key", "records"],
+  "properties": {
+    "schema_version": { "const": "lablineage.manifest.v1" },
+    "bundle_id": { "type": "string", "minLength": 1 },
+    "project_key": { "type": "string", "minLength": 1 },
+    "captured_at": { "type": "string", "format": "date-time" },
+    "root_path_token": { "type": "string", "pattern": "^pth_" },
+    "directory_fingerprint": { "$ref": "#/$defs/fingerprint" },
+    "policy": {
+      "type": "object",
+      "required": ["exclusions", "symlinks", "raw_paths_exported"],
+      "properties": {
+        "exclusions": { "type": "array", "items": { "type": "string" } },
+        "symlinks": { "const": "ignored" },
+        "raw_paths_exported": { "const": false }
+      },
+      "additionalProperties": false
+    },
+    "stats": {
+      "type": "object",
+      "required": ["files", "records", "hash_cache_hits", "git_detected"],
+      "properties": {
+        "files": { "type": "integer", "minimum": 0 },
+        "records": { "type": "integer", "minimum": 0 },
+        "hash_cache_hits": { "type": "integer", "minimum": 0 },
+        "git_detected": { "type": "boolean" },
+        "scan_warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path_token", "code"],
+            "properties": {
+              "path_token": { "type": "string", "pattern": "^pth_" },
+              "code": { "enum": ["EACCES", "EPERM", "ENOENT"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "collector": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "records": {
+      "type": "array",
+      "maxItems": 50000,
+      "items": {
+        "type": "object",
+        "required": ["record_type"],
+        "properties": {
+          "record_type": {
+            "enum": ["asset", "run", "lineage_edge", "code_version", "parameter_set", "environment"]
+          },
+          "asset_id": { "type": "string" },
+          "run_id": { "type": "string" },
+          "from_entity_id": { "type": "string" },
+          "to_entity_id": { "type": "string" },
+          "relation_type": { "type": "string" },
+          "path_token": { "type": "string" },
+          "name": { "type": "string" },
+          "asset_type": { "type": "string" },
+          "content_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+          "fingerprint": { "$ref": "#/$defs/fingerprint" },
+          "size_bytes": { "type": "integer", "minimum": 0 },
+          "modified_at": { "type": "string", "format": "date-time" },
+          "width": { "type": "integer", "minimum": 1 },
+          "height": { "type": "integer", "minimum": 1 },
+          "format": { "type": "string", "maxLength": 20 },
+          "exit_code": { "type": "integer" },
+          "command_redacted": { "type": "string" },
+          "execution_mode": { "const": "controlled-rerun" },
+          "verification_status": {
+            "enum": ["captured", "verified", "failed"]
+          },
+          "rerun_hash_match": { "type": "boolean" },
+          "expected_hash": {
+            "type": ["string", "null"],
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "observed_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+          "confidence_label": {
+            "enum": ["exact", "strong", "inferred", "hypothesis", "human_verified", "unknown"]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "fingerprint": {
+      "type": "object",
+      "required": ["algorithm", "strength", "value"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "strength": { "enum": ["strong", "sampled", "metadata_only"] },
+        "value": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "sampling_policy": { "type": "string" },
+        "strategy": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
