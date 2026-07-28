@@ -1,0 +1,36 @@
+apiVersion: lablineage.dev/v1
+kind: AgentGatewayPolicy
+metadata:
+  name: guardian-default
+spec:
+  authentication:
+    type: oidc
+    audience: lablineage-api
+  authorization:
+    projectClaim: projects
+    roleClaim: roles
+    denyByDefault: true
+  rateLimits:
+    agent:
+      requestsPerMinute: 12
+    ingestion:
+      requestsPerMinute: 30
+  data:
+    maxRequestBytes: 5242880
+    rawPaths: deny
+    secrets: deny
+    promptLogging: metadata-only
+  tools:
+    read:
+      confirmation: none
+    write:
+      confirmation: explicit
+      idempotencyKey: required
+      auditEvent: required
+  egress:
+    allow:
+      - api.github.com
+      - www.googleapis.com
+      - sheets.googleapis.com
+      - gmail.googleapis.com
+      - aiplatform.googleapis.com

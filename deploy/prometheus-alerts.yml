@@ -1,0 +1,67 @@
+groups:
+  - name: lablineage-guardian
+    interval: 30s
+    rules:
+      - alert: LabLineageApiDown
+        expr: up{job="lablineage-guardian"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: LabLineage Guardian API is unavailable
+          runbook: docs/operations-runbook.md#api-unavailable
+
+      - alert: LabLineageHighServerErrorRate
+        expr: |
+          (
+            sum(rate(lablineage_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(lablineage_http_requests_total[5m])), 0.001)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: LabLineage API 5xx rate exceeds 5%
+          runbook: docs/operations-runbook.md#elevated-error-rate
+
+      - alert: LabLineageHighMeanLatency
+        expr: |
+          (
+            sum(rate(lablineage_http_request_duration_seconds_sum[5m]))
+            /
+            clamp_min(sum(rate(lablineage_http_requests_total[5m])), 0.001)
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: LabLineage mean API latency exceeds two seconds
+          runbook: docs/operations-runbook.md#elevated-latency
+
+      - alert: LabLineageAgentTokenSpike
+        expr: sum(increase(lablineage_agent_tokens_total[1h])) > 1000000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Agent usage exceeded one million tokens in one hour
+          runbook: docs/operations-runbook.md#agent-token-spike
+
+      - alert: LabLineageIngestionQueueStalled
+        expr: lablineage_ingestion_oldest_queued_seconds > 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Oldest ingestion job has remained queued for more than five minutes
+          runbook: docs/operations-runbook.md#ingestion-queue-stalled
+
+      - alert: LabLineageIngestionFailures
+        expr: lablineage_ingestion_jobs{status="failed"} > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: One or more ingestion jobs require operator review
+          runbook: docs/operations-runbook.md#ingestion-job-failed

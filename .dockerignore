@@ -1,0 +1,10 @@
+node_modules
+frontend/dist
+.git
+.github
+.lablineage
+.reference
+*.zip
+.env*
+coverage
+output

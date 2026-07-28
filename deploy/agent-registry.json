@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "lablineage.agent-registry.v1",
+  "agents": [
+    {
+      "id": "lablineage-guardian",
+      "displayName": "LabLineage Guardian",
+      "version": "0.3.0",
+      "runtime": "google-adk-node",
+      "model": "${LABLINEAGE_MODEL}",
+      "endpoint": "${GUARDIAN_BASE_URL}/v1/projects/{projectId}/agent",
+      "authentication": "oidc",
+      "dataClassification": "research-metadata",
+      "tools": [
+        { "name": "get_project_summary", "mode": "read", "classification": "internal" },
+        { "name": "get_lineage_graph", "mode": "read", "classification": "research-metadata" },
+        { "name": "get_findings", "mode": "read", "classification": "research-metadata" },
+        { "name": "get_snapshot_changes", "mode": "read", "classification": "research-metadata" },
+        { "name": "get_audit_events", "mode": "read", "classification": "security-audit" }
+      ],
+      "writePolicy": "No direct write tools. Workspace writes use a separate preview and confirmation API.",
+      "owner": "LabLineage platform team"
+    }
+  ],
+  "mcpServers": [
+    { "id": "edge-collector", "authentication": "hashed-service-token", "mode": "manifest-write", "classification": "research-metadata" },
+    { "id": "github", "authentication": "github-token-or-app", "mode": "read-only", "classification": "source-metadata" },
+    { "id": "google-workspace", "authentication": "oauth2", "mode": "confirmed-write", "classification": "handoff-report" }
+  ]
+}

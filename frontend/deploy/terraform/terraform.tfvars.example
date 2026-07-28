@@ -1,0 +1,24 @@
+project_id  = "replace-with-project-id"
+region      = "asia-east1"
+image       = "asia-east1-docker.pkg.dev/replace-with-project/lablineage/guardian@sha256:replace"
+artifact_repository_id = "lablineage"
+enable_github_deploy    = true
+github_repository       = "UynajGI/LabLineage"
+tenant_id   = "11111111-1111-4111-8111-111111111111"
+tenant_slug = "example-lab"
+tenant_name = "Example Lab"
+
+oidc_issuer                 = "https://issuer.example/"
+oidc_audience               = "lablineage-api"
+oidc_jwks_url               = "https://issuer.example/.well-known/jwks.json"
+oidc_client_id              = "lablineage-spa"
+oidc_authorization_endpoint = "https://issuer.example/authorize"
+oidc_token_endpoint         = "https://issuer.example/oauth/token"
+oidc_redirect_uri           = "https://replace-with-cloud-run-url/"
+
+trusted_collector_fingerprints = "replace-with-sha256-spki-fingerprint"
+# The static shell and PKCE callback must be reachable before the browser has a token.
+# /v1 remains protected by application OIDC. Use an IAP/proxy architecture instead
+# if organizational policy forbids public Cloud Run invocation.
+invoker_members = ["allUsers"]
+object_lifecycle_days = 365

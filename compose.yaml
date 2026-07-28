@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: lablineage
+      POSTGRES_USER: lablineage
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - lablineage_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lablineage -d lablineage"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  guardian:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "8788"
+      DATABASE_URL: postgresql://lablineage:${POSTGRES_PASSWORD}@postgres:5432/lablineage
+      LABLINEAGE_AUTO_MIGRATE: "true"
+      LABLINEAGE_TENANT_SLUG: ${LABLINEAGE_TENANT_SLUG:-local-lab}
+      LABLINEAGE_TENANT_NAME: ${LABLINEAGE_TENANT_NAME:-Local Lab}
+      LABLINEAGE_ALLOW_TENANT_BOOTSTRAP: "true"
+      LABLINEAGE_AUTH_MODE: ${LABLINEAGE_AUTH_MODE:-oidc}
+      LABLINEAGE_OIDC_ISSUER: ${LABLINEAGE_OIDC_ISSUER:-}
+      LABLINEAGE_OIDC_AUDIENCE: ${LABLINEAGE_OIDC_AUDIENCE:-}
+      LABLINEAGE_OIDC_JWKS_URL: ${LABLINEAGE_OIDC_JWKS_URL:-}
+      GOOGLE_GENAI_API_KEY: ${GOOGLE_GENAI_API_KEY:-}
+      LABLINEAGE_VERTEX_EXPRESS: ${LABLINEAGE_VERTEX_EXPRESS:-TRUE}
+      LABLINEAGE_MODEL: ${LABLINEAGE_MODEL:-gemini-2.5-flash}
+      LABLINEAGE_REQUIRE_SIGNED_MANIFESTS: "true"
+      LABLINEAGE_TRUSTED_COLLECTOR_KEYS: ${LABLINEAGE_TRUSTED_COLLECTOR_KEYS:-}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+    ports:
+      - "8788:8788"
+    restart: unless-stopped
+
+volumes:
+  lablineage_pgdata:
