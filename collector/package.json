@@ -1,0 +1,27 @@
+{
+  "name": "@lablineage/edge-collector",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "bin": {
+    "lablineage": "./src/cli.js",
+    "lablineage-collector": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "test": "node --test",
+    "benchmark": "node scripts/benchmark.js",
+    "benchmark:ci": "node scripts/benchmark.js --files 5000 --min-cold-fps 50 --min-warm-fps 250",
+    "benchmark:large": "node scripts/benchmark.js --files 1000000"
+  },
+  "engines": {
+    "node": ">=22.15"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  }
+}
