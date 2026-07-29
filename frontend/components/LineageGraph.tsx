@@ -292,6 +292,32 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
     }
   };
 
+  const connectedEdges = selectedNode
+    ? edgeData.map((edge) => {
+        const isIncoming = edge.target === selectedNode.id;
+        const isOutgoing = edge.source === selectedNode.id;
+        if (!isIncoming && !isOutgoing) return null;
+        const neighborId = isIncoming ? edge.source : edge.target;
+        return {
+          edge,
+          direction: isIncoming ? 'Incoming' : 'Outgoing',
+          neighbor: nodes.find((node) => node.id === neighborId)
+        };
+      }).filter((item): item is {
+        edge: LineageEdge;
+        direction: 'Incoming' | 'Outgoing';
+        neighbor: LineageNode | undefined;
+      } => item !== null)
+    : [];
+
+  const showEdgeDetails = (edge: LineageEdge) => {
+    setSelectedEdge(edge);
+    setSelectedNode(null);
+    setEdgeComment('');
+    setReviewMessage('');
+    setReviewError('');
+  };
+
   return (
     <div className="flex h-full border border-slate-200 rounded-lg bg-white overflow-hidden shadow-sm relative">
       <div ref={containerRef} className="flex-1 h-full relative">
@@ -341,6 +367,51 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
                   {selectedNode.status || 'unknown'}
                 </span>
               </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center space-x-1">
+                <Link size={14} />
+                <span>Connected relationships</span>
+              </p>
+              <p className="mb-3 text-xs text-slate-500">
+                Open a relationship to inspect its direction, confidence, and evidence IDs.
+              </p>
+              {connectedEdges.length > 0 ? (
+                <div className="space-y-2">
+                  {connectedEdges.map(({ edge, direction, neighbor }) => (
+                    <button
+                      key={edge.id}
+                      type="button"
+                      onClick={() => showEdgeDetails(edge)}
+                      className="w-full rounded-md border border-slate-200 bg-white p-3 text-left shadow-sm transition-colors hover:border-blue-300 hover:bg-blue-50"
+                      aria-label={`Open ${edge.relation} relationship with ${neighbor?.label || (direction === 'Incoming' ? edge.source : edge.target)}`}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-slate-800">{edge.relation}</span>
+                        <span className={`rounded px-2 py-0.5 text-xs font-medium ${
+                          direction === 'Incoming'
+                            ? 'bg-indigo-100 text-indigo-700'
+                            : 'bg-emerald-100 text-emerald-700'
+                        }`}>
+                          {direction}
+                        </span>
+                      </span>
+                      <span className="mt-1 block text-sm text-slate-700">
+                        {neighbor?.label || (direction === 'Incoming' ? edge.source : edge.target)}
+                        {neighbor ? ` · ${neighbor.type}` : ''}
+                      </span>
+                      <span className="mt-2 block text-xs text-slate-500">
+                        Evidence: {(edge.evidenceIds || []).join(', ') || 'none'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded border border-slate-200 bg-white p-3 text-sm text-slate-600">
+                  No relationships are connected to this node.
+                </p>
+              )}
             </div>
 
             {/* Human in the loop section */}

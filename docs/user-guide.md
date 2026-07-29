@@ -1,5 +1,7 @@
 # LabLineage Guardian 用户指南
 
+第一次接触本项目时，先阅读[从这里开始](start-here.md)并完成[10 分钟体验](quickstart.md)。需要采集自己的目录时，再执行[接入第一个项目](first-project.md)。不熟悉的概念可查阅[核心术语表](glossary.md)。
+
 ## 1. 登录与角色
 
 开发环境使用本地身份；生产环境必须使用 OIDC PKCE 登录。页面和 API 都按项目授权：
@@ -22,6 +24,9 @@
 
 ## 3. 查看和确认谱系
 
+- 点击节点后，先在 **Connected relationships** 核对相邻节点、方向和 evidence
+  ID；打开一条关系后，再在 **Relation Evidence** 核对 `From`、`To`、
+  `Relation` 和 `Confidence`。
 - 实线事实来自精确哈希、签名 Manifest 或已确认的平台证据。
 - 候选关系、移动候选和历史推断必须显示为“推断”，不能冒充事实。
 - 只有审计员能够确认或拒绝候选边；每次决定都保留评论、操作者和版本历史。

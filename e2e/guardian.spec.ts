@@ -55,6 +55,25 @@ test('console routes have no serious or critical accessibility violations', asyn
   expect(blocking, JSON.stringify(blocking, null, 2)).toEqual([]);
 });
 
+test('new user can inspect a result and its relationship evidence without clicking a graph line', async ({ page }) => {
+  await page.goto('/#/lineage');
+  await page.getByText('fig3.png', { exact: true }).click();
+
+  await expect(page.getByRole('heading', { name: 'Node Details' })).toBeVisible();
+  await expect(page.getByText('Connected relationships', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', {
+    name: 'Open generated relationship with plot_phase.py #019',
+    exact: true
+  }).click();
+
+  await expect(page.getByRole('heading', { name: 'Relation Evidence' })).toBeVisible();
+  await expect(page.getByText('Relation: generated', { exact: true })).toBeVisible();
+  await expect(page.getByText('From: run_plot_019', { exact: true })).toBeVisible();
+  await expect(page.getByText('To: figure_3', { exact: true })).toBeVisible();
+  await expect(page.getByText('ev_figure_hash', { exact: true })).toBeVisible();
+});
+
 test('operator can import a manifest through the Upload Center', async ({ page }) => {
   const bundleId = `playwright-${Date.now()}`;
   await page.goto('/#/upload');

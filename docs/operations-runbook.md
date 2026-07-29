@@ -49,7 +49,7 @@
 ## API unavailable
 
 1. 检查 `GET /api/health`、进程状态和 8788 端口。
-2. 检查 PostgreSQL 连接池、最近迁移和磁盘空间。
+2. 检查 PostgreSQL 连接池、已应用迁移和磁盘空间。
 3. 若刚发生热重启，确认日志出现 `API listening`；前端 GET 会在短暂窗口内自动退避重试。
 4. 超过两分钟仍未恢复时，回滚上一镜像并保留相关 Trace 和日志。
 

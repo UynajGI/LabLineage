@@ -9,6 +9,18 @@
 
 ## 开发启动
 
+macOS / Linux：
+
+```bash
+npm install --ignore-scripts
+cp .env.example backend/.env.local
+node scripts/install-git-hooks.mjs
+npm run seed
+npm run dev
+```
+
+Windows PowerShell：
+
 ```powershell
 npm install --ignore-scripts
 Copy-Item .env.example backend/.env.local
@@ -48,7 +60,7 @@ node scripts/install-git-hooks.mjs
 - `pre-commit`：阻止密钥、私有状态和生成物；按改动范围运行契约、迁移、类型或 Collector 检查。
 - `commit-msg`：要求 Conventional Commits。
 - `pre-push`：执行后端/Collector 测试、前端构建、Agent 评测、契约门禁、性能门禁和浏览器 E2E/Axe。
-- `post-commit`：把最近提交的校验记录写入 `.git/lablineage-last-commit.json`。
+- `post-commit`：把当前 `HEAD` 提交的校验记录写入 `.git/lablineage-last-commit.json`。
 
 ## CI/CD
 

@@ -2,14 +2,32 @@
 
 LabLineage Guardian is an evidence-first research lineage and handoff system. It includes a React console, an authenticated Node API, PostgreSQL migrations and tenant isolation, a signed Edge Collector, deterministic lineage/audit rules, a Google ADK agent, and guarded GitHub/Google Workspace integrations.
 
+## New here?
+
+Start with [从这里开始](docs/start-here.md). It separates the paths for researchers, auditors, administrators, operators, and developers.
+
+- [10 分钟体验](docs/quickstart.md): use seeded data; no cloud or model credentials required.
+- [接入第一个项目](docs/first-project.md): create a project, scan a safe directory, import a signed Manifest, and inspect lineage.
+- [核心术语表](docs/glossary.md): Project, Snapshot, Bundle, Evidence, Finding, and R0–R4.
+
 ## Open the application
 
 Requirements: Node.js 22.15 or newer.
 
+macOS / Linux:
+
+```bash
+npm install --ignore-scripts
+cp .env.example backend/.env.local
+npm run seed
+npm run dev
+```
+
+Windows PowerShell:
+
 ```powershell
 npm install --ignore-scripts
 Copy-Item .env.example backend/.env.local
-node scripts/install-git-hooks.mjs
 npm run seed
 npm run dev
 ```
@@ -83,7 +101,7 @@ failures are retried with bounded exponential backoff.
 - Base images and browser dependencies are digest/version pinned; production deployment resolves the pushed Artifact Registry tag to a digest before migration or rollout.
 - Provision Artifact Registry and GitHub OIDC with Terraform, then use the protected `Deploy` workflow for staging or production.
 
-See the [user guide](docs/user-guide.md), [administrator guide](docs/administrator-guide.md), [full-scope completion matrix](docs/full-scope-completion-matrix.md), [API and data contracts](docs/api-and-data-contracts.md), [operations runbook](docs/operations-runbook.md), [threat model](docs/threat-model.md), [dependency risk register](docs/dependency-risk-register.md), and [architecture](docs/architecture.md).
+See the [documentation entry point](docs/start-here.md), [user guide](docs/user-guide.md), [administrator guide](docs/administrator-guide.md), [full-scope completion matrix](docs/full-scope-completion-matrix.md), [API and data contracts](docs/api-and-data-contracts.md), [operations runbook](docs/operations-runbook.md), [threat model](docs/threat-model.md), [dependency risk register](docs/dependency-risk-register.md), and [architecture](docs/architecture.md).
 
 ## Verification
 

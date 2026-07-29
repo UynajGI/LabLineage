@@ -13,12 +13,12 @@
 | Google Workspace 与报告存储 | Drive 报告、Sheets 幂等台账、Gmail 仅草稿、撤权失败、数据策略、持久对象 | 进行中 | 真实 REST 连接器、实时预览、显式确认、Drive/Sheets 外部幂等、Gmail draft-only，以及数据库分布式步骤进度/崩溃恢复已实现；版本报告和本地 Markdown/CSV/EML 预览写入带 reservation 的不可变对象存储，本地导出只返回 `exportId`/校验和/大小而不暴露绝对路径，生产 GCS 使用 generation precondition、CRC32C/SHA-256、运行身份仅 create/read、30 天保留与默认 365 天生命周期；待真实 OAuth/GCS 沙箱与撤权验证 |
 | ADK Agent | 只读工具、轨迹评测、提示注入防护、成本/超时/降级 | 进行中 | Vertex Express 经 17891 实际调用成功；谱系/发现、提示注入和秘密外泄 4 类轨迹评测通过，工具白名单、R4 规则与 token 指标已实现；待云环境持续回归与预算告警 |
 | Runtime / Registry / Gateway | 部署、版本注册、工具能力/认证/数据等级、网关策略 | 进行中 | Registry、默认拒绝 Gateway policy、策略验证器、非 root 容器和已验证的 Cloud Run/Cloud SQL Terraform 已实现；待云 Runtime 注册、部署与回滚验证 |
-| 控制台 | 真实 API 工作流、空/错/加载状态、确认门、无 mock 回退 | 完成（实现） | mock 与固定快照/账号数据已移除；10 个 hash 页面使用真实 API，节点确认调用后端，关系审核生成证据，状态变更只提交待审提案，角色直达拦截、OIDC Authorization Code + PKCE、确认门、网络重试、浏览器 E2E 和 Axe serious/critical 门禁均通过 |
+| 控制台 | 真实 API 工作流、空/错/加载状态、确认门、无 mock 回退 | 完成（实现） | mock 与固定快照/账号数据已移除；10 个 hash 页面使用真实 API，节点详情直接列出相邻关系、方向和 evidence ID 并可打开关系证据；节点确认调用后端，关系审核生成证据，状态变更只提交待审提案，角色直达拦截、OIDC Authorization Code + PKCE、确认门、网络重试、浏览器 E2E 和 Axe serious/critical 门禁均通过 |
 | 安全与隐私 | 威胁模型、秘密检测、最小权限、加密、依赖/容器扫描、事件与轮换 SOP | 进行中 | 安全头、RBAC、项目隔离、签名、秘密文件排除、威胁模型和 critical audit 通过；正式审计为 0 critical、13 high，剩余项均来自 ADK 传递依赖并登记风险；待容器扫描与真实权限审查 |
 | 可观测性与运维 | 结构化日志、Trace、指标、告警、成本、备份/恢复、运行手册 | 进行中 | 请求/Trace ID、OpenTelemetry OTLP、Prometheus HTTP/Agent token 指标、告警规则、readiness、优雅停机、备份/校验恢复脚本和运行手册已实现；待真实备份恢复演练和告警投递 |
-| 测试与质量 | 单元、契约、集成、安全、Agent 轨迹、性能、E2E、可用性 | 进行中 | 后端 48 项（本机 47 通过、1 项真实 PostgreSQL 门禁跳过）、Collector 17/17、5 项跨 10 页面及上传/发现解决/交接预览的浏览器 E2E/Axe 和 4 类 Agent 轨迹评测通过；最新 5,000 文件门禁冷 6,372、热 36,553 files/s，热缓存 100% 命中且目录指纹稳定；本地 Git 适配、对象 reservation/不可变性、载荷隔离、事务失败回滚、跨项目外部 ID 碰撞、具体 OpenAPI 契约和发布证据防篡改均有测试；待真实 PostgreSQL/GCS/外部平台/百万级性能/试点验收 |
+| 测试与质量 | 单元、契约、集成、安全、Agent 轨迹、性能、E2E、可用性 | 进行中 | 后端 48 项（本机 47 通过、1 项真实 PostgreSQL 门禁跳过）、Collector 17/17、6 项覆盖 10 个页面、上传、发现解决、交接预览和新用户关系证据导航的浏览器 E2E/Axe，以及 4 类 Agent 轨迹评测通过；5,000 文件性能门禁验证冷/热扫描、热缓存 100% 命中和目录指纹稳定，具体吞吐由每次 CI/本地门禁产物记录，避免把易漂移机器读数固化为产品事实；本地 Git 适配、对象 reservation/不可变性、载荷隔离、事务失败回滚、跨项目外部 ID 碰撞、具体 OpenAPI 契约和发布证据防篡改均有测试；待真实 PostgreSQL/GCS/外部平台/百万级性能/试点验收 |
 | CI/CD 与部署 | 可复现构建、迁移、扫描、制品、环境部署、回滚 | 进行中 | CI 已定义 PostgreSQL service、测试、跨平台 Collector、浏览器关键写交互/E2E/Axe、迁移、critical audit、Trivy、具体 OpenAPI 请求/响应 schema、迁移函数/RLS/幂等/工作流门禁和镜像构建；第三方 Action、Node/PostgreSQL 镜像和前端依赖均固定 SHA/digest/精确版本并由 Dependabot 受审更新；主分支生成 CycloneDX、Collector 包、SHA-256 与 Sigstore 证据；CD 将 Artifact Registry 标签解析为 digest 后再更新迁移 Job/Cloud Run，readiness 失败自动回滚；待首次 CI/云执行与回滚演练 |
-| 试点与交付 | 真实项目试点、指标验证、用户手册、运维交接、RC 演示 | 进行中 | 用户指南、管理员指南、运行手册、演示脚本和当前验收证据已完成；真实课题组数据授权、试点指标、培训记录和 RC 签字仍需外部环境与负责人 |
+| 试点与交付 | 真实项目试点、指标验证、用户手册、运维交接、RC 演示 | 进行中 | 已提供按角色分流的文档入口、10 分钟演示教程、第一个项目接入教程、术语表、用户/管理员指南、运行手册、演示脚本和当前验收证据；真实课题组数据授权、试点指标、培训记录和 RC 签字仍需外部环境与负责人 |
 
 ## 关闭规则
 
