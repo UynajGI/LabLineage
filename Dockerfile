@@ -13,6 +13,7 @@ RUN npm run build && npm prune --omit=dev --omit=optional
 FROM node:22.22-bookworm-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752 AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 RUN groupadd --system --gid 10001 lablineage \
     && useradd --system --uid 10001 --gid lablineage --home-dir /app lablineage
 COPY --from=build --chown=lablineage:lablineage /app /app
