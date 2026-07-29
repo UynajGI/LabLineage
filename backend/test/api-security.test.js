@@ -36,6 +36,18 @@ test('security headers, RBAC and project isolation are enforced over HTTP', asyn
       const clientConfig = await fetch(`${baseUrl}/api/client-config`);
       assert.equal(clientConfig.status, 200);
       assert.deepEqual(await clientConfig.json(), { mode: 'development', enabled: false });
+      const readiness = await fetch(`${baseUrl}/api/ready`);
+      assert.equal(readiness.status, 200);
+      assert.deepEqual(await readiness.json(), {
+        status: 'ready',
+        database: 'json-development',
+        objectStorage: { mode: 'local', writable: true, readable: true }
+      });
+      const integrationStatus = await fetch(`${baseUrl}/v1/integrations/status`, {
+        headers: { 'x-lablineage-role': 'viewer' }
+      });
+      assert.equal(integrationStatus.status, 200);
+      assert.equal((await integrationStatus.json()).objectStorage.configured, true);
       const version = await fetch(`${baseUrl}/api/version`);
       assert.equal((await version.json()).manifestSchema, 'lablineage.manifest.v1');
       const openApi = await fetch(`${baseUrl}/api/openapi.json`);
@@ -315,6 +327,95 @@ test('security headers, RBAC and project isolation are enforced over HTTP', asyn
       const confirmConflict = await confirmRequest('{"different":true}');
       assert.equal(confirmConflict.status, 409);
 
+      const isolationProjectResponse = await fetch(`${baseUrl}/v1/projects`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-lablineage-role': 'admin',
+          'idempotency-key': `isolation-project-${Date.now()}`
+        },
+        body: JSON.stringify({ name: `Isolation project ${Date.now()}` })
+      });
+      assert.equal(isolationProjectResponse.status, 201);
+      const isolationProject = await isolationProjectResponse.json();
+      const originalSummaryAfterProjectCreation = await fetch(
+        `${baseUrl}/v1/projects/${visibleProjects[0].id}/summary`,
+        { headers: { 'x-lablineage-role': 'viewer' } }
+      );
+      assert.equal((await originalSummaryAfterProjectCreation.json()).totalAssets, visibleProjects[0].totalAssets);
+      const isolatedSummaryResponse = await fetch(
+        `${baseUrl}/v1/projects/${isolationProject.id}/summary`,
+        { headers: { 'x-lablineage-role': 'viewer' } }
+      );
+      assert.equal((await isolatedSummaryResponse.json()).totalAssets, 0);
+      const sharedBundleId = `shared-project-bundle-${Date.now()}`;
+      const originalProjectSlug = store.get().projects.find((project) => project.id === visibleProjects[0].id).slug;
+      const isolationProjectSlug = store.get().projects.find((project) => project.id === isolationProject.id).slug;
+      const importSharedIdentity = (projectKey) => fetch(`${baseUrl}/v1/manifests`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-lablineage-role': 'editor',
+          'idempotency-key': `${sharedBundleId}-${projectKey}`
+        },
+        body: JSON.stringify({
+          schema_version: 'lablineage.manifest.v1',
+          bundle_id: sharedBundleId,
+          project_key: projectKey,
+          records: [{
+            record_type: 'asset',
+            asset_id: 'shared-external-id',
+            evidence_ids: ['shared-external-evidence']
+          }]
+        })
+      });
+      assert.equal((await importSharedIdentity(originalProjectSlug)).status, 202);
+      assert.equal((await importSharedIdentity(isolationProjectSlug)).status, 202);
+      assert.equal(
+        store.get().nodes.some((node) => node.id === `${visibleProjects[0].id}::shared-external-id`),
+        true
+      );
+      assert.equal(
+        store.get().nodes.some((node) => node.id === `${isolationProject.id}::shared-external-id`),
+        true
+      );
+      await store.update((state) => {
+        state.nodes.push({
+          id: `cross_project_node_${Date.now()}`,
+          projectId: isolationProject.id,
+          type: 'Dataset',
+          label: 'Must remain isolated',
+          status: 'candidate'
+        });
+        state.edges.push({
+          source: confirmTarget.id,
+          target: state.nodes.at(-1).id,
+          relation: 'must_not_cross_project_boundary',
+          confidence: 'inferred'
+        });
+      });
+      const boundedArtifactLineage = await fetch(`${baseUrl}/v1/artifacts/${confirmTarget.id}/lineage`, {
+        headers: { 'x-lablineage-role': 'viewer' }
+      });
+      const boundedArtifactLineageBody = await boundedArtifactLineage.json();
+      assert.equal(
+        boundedArtifactLineageBody.nodes.some((node) => node.projectId === isolationProject.id),
+        false
+      );
+      const crossProjectNodeConfirmation = await fetch(
+        `${baseUrl}/v1/projects/${isolationProject.id}/nodes/${confirmTarget.id}/confirm`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-lablineage-role': 'admin',
+            'idempotency-key': `cross-project-node-${Date.now()}`
+          },
+          body: '{}'
+        }
+      );
+      assert.equal(crossProjectNodeConfirmation.status, 404);
+
       const edgeReview = await fetch(`${baseUrl}/v1/lineage-edges/${reviewTarget.id}/review`, {
         method: 'POST',
         headers: {
@@ -384,6 +485,40 @@ test('security headers, RBAC and project isolation are enforced over HTTP', asyn
       });
       assert.equal(savedReport.status, 200);
       assert.equal((await savedReport.json()).sha256, report.sha256);
+
+      const missingExportConfirmation = await fetch(
+        `${baseUrl}/v1/projects/${visibleProjects[0].id}/handoffs/export`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-lablineage-role': 'editor',
+            'idempotency-key': `local-export-missing-${Date.now()}`
+          },
+          body: '{}'
+        }
+      );
+      assert.equal(missingExportConfirmation.status, 400);
+      const localExportResponse = await fetch(
+        `${baseUrl}/v1/projects/${visibleProjects[0].id}/handoffs/export`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-lablineage-role': 'editor',
+            'idempotency-key': `local-export-${Date.now()}`
+          },
+          body: JSON.stringify({ confirmation: 'CREATE_LOCAL_HANDOFF_PREVIEW' })
+        }
+      );
+      assert.equal(localExportResponse.status, 201);
+      const localExport = await localExportResponse.json();
+      assert.equal(localExport.status, 'preview_created');
+      assert.equal(localExport.sent, false);
+      assert.match(localExport.exportId, /^export_/);
+      assert.equal(localExport.files.length, 3);
+      assert.equal(JSON.stringify(localExport).includes(testDataDir), false);
+      assert.equal(localExport.files.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)), true);
 
       process.env.LABLINEAGE_AUTH_MODE = 'oidc';
       process.env.LABLINEAGE_SERVICE_TOKENS_JSON = JSON.stringify([{

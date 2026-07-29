@@ -1,9 +1,8 @@
-import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createPool, runMigrations } from './database.js';
 import { syncNormalizedProjection } from './postgres-projection.js';
-import { enforceR4Evidence, makeDemoState, normalizeStateOwnership } from './store.js';
+import { appendAuditEvent, enforceR4Evidence, makeDemoState, normalizeStateOwnership } from './store.js';
 
 const backendDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,6 +29,8 @@ function emptyState() {
     ingestionJobs: [],
     statusProposals: [],
     handoffReports: [],
+    handoffExports: [],
+    objectReservations: [],
     idempotencyRecords: [],
     snapshots: [],
     evidence: [],
@@ -147,16 +148,17 @@ export class PostgresStore {
         [this.tenantId]
       );
       if (!locked.rowCount) throw new Error('Tenant application state is missing');
-      this.state = locked.rows[0].state;
-      const result = await mutator(this.state);
+      const nextState = locked.rows[0].state;
+      const result = await mutator(nextState);
+      await syncNormalizedProjection(client, this.tenantId, nextState);
       await client.query(
         `UPDATE application_state
          SET state=$2::jsonb,version=version+1,updated_at=now()
          WHERE tenant_id=$1`,
-        [this.tenantId, JSON.stringify(this.state)]
+        [this.tenantId, JSON.stringify(nextState)]
       );
-      await syncNormalizedProjection(client, this.tenantId, this.state);
       await client.query('COMMIT');
+      this.state = nextState;
       return result;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -166,20 +168,30 @@ export class PostgresStore {
     }
   }
 
+  async updateWithAudit(mutator, audit) {
+    let event;
+    const result = await this.update((state) => {
+      const value = mutator(state);
+      if (value && typeof value.then === 'function') {
+        throw new Error('updateWithAudit mutators must be synchronous');
+      }
+      const auditRecord = typeof audit === 'function' ? audit(value, state) : audit;
+      if (auditRecord) event = appendAuditEvent(state, auditRecord);
+      return value;
+    });
+    return { result, event };
+  }
+
   async log({ action, resource, status = 'success', details, userSubject, actor }) {
-    const event = {
-      id: `ae_${randomUUID()}`,
-      timestamp: new Date().toISOString(),
-      traceId: `trace_${randomUUID()}`,
-      userSubject: userSubject || actor || 'system',
-      action,
-      resource,
-      status,
-      details
-    };
+    let event;
     await this.update((state) => {
-      state.auditEvents.unshift(event);
-      state.auditEvents = state.auditEvents.slice(0, 500);
+      event = appendAuditEvent(state, {
+        action,
+        resource,
+        status,
+        details,
+        userSubject: userSubject || actor || 'system',
+      });
     });
     return event;
   }

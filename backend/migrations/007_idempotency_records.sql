@@ -24,5 +24,5 @@ CREATE INDEX idempotency_records_expiry_idx
 ALTER TABLE idempotency_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE idempotency_records FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_idempotency_records ON idempotency_records
-  USING (tenant_id = app_current_tenant())
-  WITH CHECK (tenant_id = app_current_tenant());
+  USING (tenant_id = current_tenant_id())
+  WITH CHECK (tenant_id = current_tenant_id());

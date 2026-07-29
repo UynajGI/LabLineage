@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17.10-alpine@sha256:dc17045ccfd343b49600570ea734b9c4991cf1c3f3302e67df51e3b402dd55c4
     environment:
       POSTGRES_DB: lablineage
       POSTGRES_USER: lablineage
@@ -36,6 +36,10 @@ services:
       LABLINEAGE_MODEL: ${LABLINEAGE_MODEL:-gemini-2.5-flash}
       LABLINEAGE_REQUIRE_SIGNED_MANIFESTS: "true"
       LABLINEAGE_TRUSTED_COLLECTOR_KEYS: ${LABLINEAGE_TRUSTED_COLLECTOR_KEYS:-}
+      # Explicit local-only exception for this production-shaped Compose stack.
+      # Cloud deployments must use GCS instead.
+      LABLINEAGE_OBJECT_STORE: "local"
+      LABLINEAGE_ALLOW_LOCAL_OBJECT_STORE: "true"
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
     ports:
       - "8788:8788"

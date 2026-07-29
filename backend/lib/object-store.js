@@ -67,6 +67,16 @@ class LocalObjectStore {
     const content = await readFile(path.join(this.root, ...objectKey.split('/')));
     return { content, uri: `lablineage-local://${objectKey}`, sha256: sha256(content) };
   }
+
+  async checkReady() {
+    const key = 'system/readiness-v1.txt';
+    const content = 'lablineage-object-store-readiness-v1\n';
+    const expected = sha256(content);
+    await this.putImmutable({ key, content, contentType: 'text/plain' });
+    const stored = await this.get(key);
+    if (stored.sha256 !== expected) throw new Error('Local object store readiness checksum mismatch');
+    return { mode: 'local', writable: true, readable: true };
+  }
 }
 
 class GoogleCloudObjectStore {
@@ -136,6 +146,16 @@ class GoogleCloudObjectStore {
       crc32c: metadata.crc32c,
       sha256: sha256(content),
     };
+  }
+
+  async checkReady() {
+    const key = 'system/readiness-v1.txt';
+    const content = 'lablineage-object-store-readiness-v1\n';
+    const expected = sha256(content);
+    await this.putImmutable({ key, content, contentType: 'text/plain' });
+    const stored = await this.get(key);
+    if (stored.sha256 !== expected) throw new Error('GCS object store readiness checksum mismatch');
+    return { mode: 'gcs', writable: true, readable: true };
   }
 }
 

@@ -2,7 +2,6 @@ import 'dotenv/config';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ZodError, z } from 'zod';
@@ -12,6 +11,7 @@ import { authenticateRequest, authMode, authorizeProject, authorizeRole, service
 import { postgresConfigured } from './lib/database.js';
 import { recordAgentUsage, renderPrometheusMetrics, requestObservability, structuredLog } from './lib/observability.js';
 import { createObjectStore } from './lib/object-store.js';
+import { productionConfigurationIssues } from './lib/readiness.js';
 import { importManifest } from './lib/manifest.js';
 import { createIdempotencyMiddleware } from './lib/idempotency.js';
 import {
@@ -37,32 +37,69 @@ const port = Number(process.env.LABLINEAGE_PORT || process.env.PORT || 8788);
 const host = process.env.LABLINEAGE_HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
 export const store = await createStore();
 const requireIdempotentWrite = createIdempotencyMiddleware(store);
+const READINESS_CACHE_MS = 15_000;
+let readinessCache = null;
+let readinessPromise = null;
+
+export async function evaluateReadiness({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && readinessCache && now - readinessCache.checkedAt < READINESS_CACHE_MS) {
+    return readinessCache.value;
+  }
+  if (!force && readinessPromise) return readinessPromise;
+  const check = async () => {
+    const issues = productionConfigurationIssues();
+    if (issues.length) {
+      throw Object.assign(new Error(`Production configuration is incomplete: ${issues.join('; ')}`), {
+        code: 'configuration_not_ready',
+        issues,
+      });
+    }
+    if (typeof store.refresh === 'function') await store.refresh();
+    const objectStorage = await createObjectStore({ dataDir: store.dataDir }).checkReady();
+    const value = {
+      status: 'ready',
+      database: postgresConfigured() ? 'postgresql' : 'json-development',
+      objectStorage,
+    };
+    readinessCache = { checkedAt: Date.now(), value };
+    return value;
+  };
+  readinessPromise = check().finally(() => {
+    readinessPromise = null;
+  });
+  return readinessPromise;
+}
 
 function projectGraph(state, projectId) {
   const project = state.projects.find((item) => item.id === projectId);
   if (!project) return null;
   const nodes = state.nodes.filter((node) => node.id === projectId || node.projectId === projectId);
   const ids = new Set(nodes.map((node) => node.id));
-  const edges = state.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target));
+  const edges = state.edges.filter((edge) => (
+    (!edge.projectId || edge.projectId === projectId) &&
+    ids.has(edge.source) &&
+    ids.has(edge.target)
+  ));
   return { project, nodes, edges };
 }
 
 function mergeGraphEvidence(state, graph) {
   state.evidence ||= [];
   for (const node of graph.nodes) {
-    const index = state.nodes.findIndex((item) => item.id === node.id);
+    const index = state.nodes.findIndex((item) => item.id === node.id && item.projectId === node.projectId);
     if (index >= 0) state.nodes[index] = node;
     else state.nodes.push(node);
   }
   for (const edge of graph.edges) {
     edge.id ||= stableEdgeId(edge);
-    const key = `${edge.source}:${edge.target}:${edge.relation}`;
-    const index = state.edges.findIndex((item) => `${item.source}:${item.target}:${item.relation}` === key);
+    const key = `${edge.projectId}:${edge.source}:${edge.target}:${edge.relation}`;
+    const index = state.edges.findIndex((item) => `${item.projectId}:${item.source}:${item.target}:${item.relation}` === key);
     if (index >= 0) state.edges[index] = edge;
     else state.edges.push(edge);
   }
   for (const item of graph.evidence) {
-    const index = state.evidence.findIndex((candidate) => candidate.id === item.id);
+    const index = state.evidence.findIndex((candidate) => candidate.id === item.id && candidate.projectId === item.projectId);
     if (index >= 0) state.evidence[index] = item;
     else state.evidence.push(item);
   }
@@ -99,19 +136,20 @@ async function ingestManifest(raw, actor, { sourceId = null } = {}) {
     evidence: imported.evidence.length,
     signerFingerprint: imported.signerFingerprint
   };
-  const outcome = await store.update((state) => {
+  const { result: outcome } = await store.updateWithAudit((state) => {
     state.importedBundles ||= [];
     state.evidence ||= [];
-    const existing = state.importedBundles.find((item) => item.bundleId === result.bundleId);
+    const existing = state.importedBundles.find((item) => item.bundleId === result.bundleId && item.projectId === project.id);
     if (existing) return { ...existing, idempotent: true };
     for (const node of imported.nodes) {
-      const index = state.nodes.findIndex((item) => item.id === node.id);
+      const index = state.nodes.findIndex((item) => item.id === node.id && item.projectId === project.id);
       if (index >= 0) state.nodes[index] = node;
       else state.nodes.push(node);
     }
     for (const edge of imported.edges) {
       edge.id ||= stableEdgeId(edge);
       const index = state.edges.findIndex((item) => (
+        item.projectId === project.id &&
         item.source === edge.source &&
         item.target === edge.target &&
         item.relation === edge.relation &&
@@ -121,7 +159,7 @@ async function ingestManifest(raw, actor, { sourceId = null } = {}) {
       else state.edges.push(edge);
     }
     for (const item of imported.evidence) {
-      const index = state.evidence.findIndex((candidate) => candidate.id === item.id);
+      const index = state.evidence.findIndex((candidate) => candidate.id === item.id && candidate.projectId === project.id);
       if (index >= 0) state.evidence[index] = item;
       else state.evidence.push(item);
     }
@@ -132,7 +170,7 @@ async function ingestManifest(raw, actor, { sourceId = null } = {}) {
       .at(-1);
     const previousSnapshot = previousSnapshotRecord ? materializeSnapshotIndex(previousSnapshotRecord) : null;
     const snapshot = {
-      id: `snapshot_${imported.manifest.bundle_id}`,
+      id: `${project.id}::snapshot_${imported.manifest.bundle_id}`,
       projectId: project.id,
       sourceId,
       bundleId: imported.manifest.bundle_id,
@@ -154,15 +192,12 @@ async function ingestManifest(raw, actor, { sourceId = null } = {}) {
     const stored = { ...result, projectId: project.id, sourceId, snapshotId: snapshot.id, importedAt };
     state.importedBundles.push(stored);
     return stored;
-  });
-  if (!outcome.idempotent) {
-    await store.log({
+  }, (stored) => stored.idempotent ? null : ({
       action: 'import_manifest',
       resource: `project/${project.id}`,
       actor: actor.subject,
       details: `Imported ${imported.nodes.length} nodes, ${imported.edges.length} edges and ${imported.evidence.length} evidence records.`
-    });
-  }
+    }));
   return outcome;
 }
 
@@ -204,6 +239,92 @@ async function loadHandoffReportMarkdown(report) {
   return stored.content.toString('utf8');
 }
 
+async function putTrackedObject({ key, content, contentType, metadata, purpose, projectId }) {
+  const reservationId = `object_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
+  const contentSha256 = createHash('sha256').update(content).digest('hex');
+  await store.update((state) => {
+    state.objectReservations ||= [];
+    const existing = state.objectReservations.find((item) => item.id === reservationId);
+    if (existing && existing.contentSha256 !== contentSha256) {
+      throw Object.assign(new Error('Object reservation key was reused with different content'), { statusCode: 409 });
+    }
+    if (existing) {
+      Object.assign(existing, { status: 'pending', updatedAt: new Date().toISOString() });
+      delete existing.failure;
+      return;
+    }
+    state.objectReservations.push({
+      id: reservationId,
+      key,
+      projectId,
+      purpose,
+      contentSha256,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  });
+  try {
+    const stored = await createObjectStore({ dataDir: store.dataDir }).putImmutable({
+      key,
+      content,
+      contentType,
+      metadata,
+    });
+    await store.update((state) => {
+      const reservation = state.objectReservations.find((item) => item.id === reservationId);
+      if (!reservation) throw new Error('Object reservation disappeared');
+      Object.assign(reservation, {
+        status: 'committed',
+        storageUri: stored.uri,
+        storageGeneration: stored.generation || null,
+        storageCrc32c: stored.crc32c || null,
+        sizeBytes: stored.sizeBytes,
+        updatedAt: new Date().toISOString(),
+      });
+    });
+    return stored;
+  } catch (error) {
+    await store.update((state) => {
+      const reservation = state.objectReservations.find((item) => item.id === reservationId);
+      if (reservation) {
+        reservation.status = 'failed';
+        reservation.failure = String(error.message || error).slice(0, 300);
+        reservation.updatedAt = new Date().toISOString();
+      }
+    }).catch(() => {});
+    throw error;
+  }
+}
+
+async function recoverObjectReservations() {
+  const pending = (store.get().objectReservations || []).filter((item) => item.status === 'pending');
+  for (const item of pending) {
+    try {
+      const stored = await createObjectStore({ dataDir: store.dataDir }).get(item.key);
+      await store.update((state) => {
+        const current = state.objectReservations.find((candidate) => candidate.id === item.id);
+        if (!current) return;
+        current.status = stored.sha256 === current.contentSha256 ? 'committed' : 'failed';
+        current.storageUri = stored.uri;
+        current.storageGeneration = stored.generation || null;
+        current.storageCrc32c = stored.crc32c || null;
+        current.sizeBytes = stored.content.length;
+        current.updatedAt = new Date().toISOString();
+        if (current.status === 'failed') current.failure = 'Recovered object checksum mismatch';
+      });
+    } catch (error) {
+      await store.update((state) => {
+        const current = state.objectReservations.find((candidate) => candidate.id === item.id);
+        if (!current) return;
+        current.status = 'failed';
+        current.failure = `Object was not recoverable after restart: ${String(error.message || error).slice(0, 220)}`;
+        current.updatedAt = new Date().toISOString();
+      });
+    }
+  }
+}
+
 function safeIngestionError(error) {
   const statusCode = error.statusCode || (error instanceof ZodError ? 400 : 500);
   return {
@@ -217,6 +338,7 @@ const ingestionInstanceId = `ingestion-worker_${randomUUID()}`;
 const ingestionExecutions = new Map();
 const INGESTION_LEASE_MS = 5 * 60 * 1000;
 const INGESTION_MAX_ATTEMPTS = 3;
+let ingestionRecoveryTimer = null;
 
 function publicIngestionJob(job) {
   if (!job) return job;
@@ -293,7 +415,7 @@ async function executeIngestionJob(jobId) {
       payload = JSON.parse(storedPayload.content.toString('utf8'));
     }
     const result = await ingestManifest(payload, claimed.actor, { sourceId: claimed.sourceId });
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       const job = state.ingestionJobs.find((item) => item.id === jobId);
       job.status = 'completed';
       job.result = result;
@@ -306,10 +428,15 @@ async function executeIngestionJob(jobId) {
       delete job.leaseOwner;
       delete job.leaseExpiresAt;
       delete job.error;
+    }, {
+      action: 'ingestion_job_completed',
+      actor: claimed.actor.subject,
+      resource: `project/${claimed.actor.projects[0]}/job/${jobId}`,
+      details: `Ingestion job completed for bundle ${result.bundleId}.`,
     });
   } catch (error) {
     const safeError = safeIngestionError(error);
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       const job = state.ingestionJobs.find((item) => item.id === jobId);
       job.updatedAt = new Date().toISOString();
       job.error = safeError;
@@ -326,7 +453,16 @@ async function executeIngestionJob(jobId) {
         delete job.payloadStorageUri;
         delete job.payloadStorageGeneration;
       }
-    });
+      return { status: job.status, attempts: job.attempts };
+    }, (outcome) => ({
+      action: outcome.status === 'queued' ? 'ingestion_job_retry_scheduled' : 'ingestion_job_failed',
+      actor: claimed.actor.subject,
+      resource: `project/${claimed.actor.projects[0]}/job/${jobId}`,
+      status: outcome.status === 'queued' ? 'success' : 'failed',
+      details: outcome.status === 'queued'
+        ? `Scheduled automatic ingestion retry after attempt ${outcome.attempts}.`
+        : `Ingestion failed after ${outcome.attempts} attempt(s).`,
+    }));
   }
   return publicIngestionJob(store.get().ingestionJobs.find((item) => item.id === jobId));
 }
@@ -358,22 +494,45 @@ function scheduleIngestionJob(jobId, delayMs = 0) {
   ingestionExecutions.set(jobId, execution);
 }
 
-async function recoverIngestionJobs() {
+export async function recoverIngestionJobs() {
+  if (typeof store.refresh === 'function') await store.refresh();
   const now = Date.now();
-  await store.update((state) => {
-    for (const job of state.ingestionJobs || []) {
-      if (job.status === 'processing' && Date.parse(job.leaseExpiresAt || 0) <= now) {
+  const expired = (store.get().ingestionJobs || [])
+    .filter((job) => job.status === 'processing' && Date.parse(job.leaseExpiresAt || 0) <= now)
+    .map((job) => job.id);
+  if (expired.length) {
+    const expiredIds = new Set(expired);
+    await store.update((state) => {
+      for (const job of state.ingestionJobs || []) {
+        if (!expiredIds.has(job.id) || job.status !== 'processing' || Date.parse(job.leaseExpiresAt || 0) > now) continue;
         job.status = 'queued';
         delete job.leaseOwner;
         delete job.leaseExpiresAt;
         job.updatedAt = new Date(now).toISOString();
       }
-    }
-  });
+    });
+  }
   for (const job of store.get().ingestionJobs || []) {
     if (job.status !== 'queued') continue;
     scheduleIngestionJob(job.id, Math.max(0, Date.parse(job.nextAttemptAt || 0) - Date.now()));
   }
+}
+
+export function startIngestionRecoveryLoop() {
+  if (ingestionRecoveryTimer) return;
+  const intervalMs = Math.max(1_000, Number(process.env.LABLINEAGE_INGESTION_POLL_MS || 5_000));
+  ingestionRecoveryTimer = setInterval(() => {
+    void recoverIngestionJobs().catch((error) => {
+      structuredLog('error', 'ingestion_recovery_failed', { error: error.message });
+    });
+  }, intervalMs);
+  ingestionRecoveryTimer.unref?.();
+}
+
+export function stopIngestionRecoveryLoop() {
+  if (!ingestionRecoveryTimer) return;
+  clearInterval(ingestionRecoveryTimer);
+  ingestionRecoveryTimer = null;
 }
 
 export function buildApp() {
@@ -432,12 +591,10 @@ export function buildApp() {
       return res.status(202).json({ accepted: true, ignored: true, reason: 'repository_not_mapped' });
     }
     const graph = githubWebhookToGraph(mapping.projectId, eventName, payload);
-    let duplicate = false;
-    await store.update((state) => {
+    const { result: duplicate } = await store.updateWithAudit((state) => {
       state.githubWebhookDeliveries ||= [];
       if (state.githubWebhookDeliveries.some((item) => item.deliveryId === deliveryId)) {
-        duplicate = true;
-        return;
+        return true;
       }
       mergeGraphEvidence(state, graph);
       state.githubWebhookDeliveries.unshift({
@@ -448,15 +605,13 @@ export function buildApp() {
         receivedAt: new Date().toISOString()
       });
       state.githubWebhookDeliveries = state.githubWebhookDeliveries.slice(0, 10_000);
-    });
-    if (!duplicate) {
-      await store.log({
+      return false;
+    }, (isDuplicate) => isDuplicate ? null : ({
         action: 'github_webhook',
         actor: `github:${repository}`,
         resource: `project/${mapping.projectId}`,
         details: `Accepted ${eventName} delivery ${deliveryId}; ${graph.evidence.length} evidence records.`
-      });
-    }
+      }));
     res.status(202).json({
       accepted: true,
       duplicate,
@@ -491,11 +646,14 @@ export function buildApp() {
 
   app.get('/api/ready', async (_req, res) => {
     try {
-      if (typeof store.refresh === 'function') await store.refresh();
-      res.json({ status: 'ready', database: postgresConfigured() ? 'postgresql' : 'json-development' });
+      res.json(await evaluateReadiness());
     } catch (error) {
       structuredLog('error', 'readiness_failed', { error: error.message });
-      res.status(503).json({ status: 'not_ready' });
+      res.status(503).json({
+        status: 'not_ready',
+        code: error.code || 'dependency_not_ready',
+        ...(error.issues ? { issues: error.issues } : {}),
+      });
     }
   });
 
@@ -548,12 +706,18 @@ export function buildApp() {
       reviewerEmail: email,
       handoffDueDate: z.union([z.literal(''), z.iso.date()])
     }).parse(req.body);
-    await store.update((state) => { state.setupConfig = input; });
-    await store.log({ action: 'update_setup_config', actor: req.actor.subject, resource: 'system/config', details: 'Configuration updated.' });
+    await store.updateWithAudit(
+      (state) => { state.setupConfig = input; },
+      { action: 'update_setup_config', actor: req.actor.subject, resource: 'system/config', details: 'Configuration updated.' }
+    );
     res.status(204).end();
   });
 
   app.get('/v1/integrations/status', (_req, res) => {
+    const objectMode = process.env.LABLINEAGE_OBJECT_STORE || (process.env.NODE_ENV === 'production' ? 'gcs' : 'local');
+    const objectStorageConfigured = objectMode === 'gcs'
+      ? Boolean(process.env.LABLINEAGE_GCS_BUCKET)
+      : process.env.NODE_ENV !== 'production' || process.env.LABLINEAGE_ALLOW_LOCAL_OBJECT_STORE === 'true';
     res.json({
       github: { configured: Boolean(process.env.GITHUB_TOKEN || (process.env.GITHUB_APP_ID && process.env.GITHUB_APP_INSTALLATION_ID && process.env.GITHUB_APP_PRIVATE_KEY)), mode: 'read-only' },
       workspace: {
@@ -571,8 +735,8 @@ export function buildApp() {
         trustedKeys: (process.env.LABLINEAGE_TRUSTED_COLLECTOR_KEYS || '').split(',').filter(Boolean).length
       },
       objectStorage: {
-        mode: process.env.LABLINEAGE_OBJECT_STORE || (process.env.NODE_ENV === 'production' ? 'gcs' : 'local'),
-        configured: process.env.NODE_ENV !== 'production' || Boolean(process.env.LABLINEAGE_GCS_BUCKET),
+        mode: objectMode,
+        configured: objectStorageConfigured,
         immutableWrites: true
       }
     });
@@ -584,6 +748,18 @@ export function buildApp() {
       process.env.LABLINEAGE_OIDC_AUDIENCE &&
       process.env.LABLINEAGE_OIDC_JWKS_URL
     );
+    const objectMode = process.env.LABLINEAGE_OBJECT_STORE || (process.env.NODE_ENV === 'production' ? 'gcs' : 'local');
+    const objectStorageConfigured = objectMode === 'gcs'
+      ? Boolean(process.env.LABLINEAGE_GCS_BUCKET)
+      : process.env.NODE_ENV !== 'production' || process.env.LABLINEAGE_ALLOW_LOCAL_OBJECT_STORE === 'true';
+    const objectStorageState = process.env.NODE_ENV !== 'production'
+      ? 'development'
+      : objectStorageConfigured ? 'configured' : 'not_configured';
+    const objectStorageDetail = objectMode === 'gcs'
+      ? 'Google Cloud Storage uses generation preconditions for immutable writes.'
+      : process.env.NODE_ENV === 'production'
+        ? 'Explicit local production-shaped exception is active; use GCS for real production.'
+        : 'Atomic local object store is active.';
     res.json({
       actor: { subject: req.actor.subject, kind: req.actor.kind, roles: req.actor.roles },
       capabilities: [
@@ -593,7 +769,7 @@ export function buildApp() {
         { id: 'collector', title: 'Signed Edge Collector', state: 'ready', detail: 'CLI, SQLite incremental index, static parsers, path tokens and Ed25519 bundles are implemented.' },
         { id: 'github', title: 'GitHub read-only connector', state: (process.env.GITHUB_TOKEN || (process.env.GITHUB_APP_ID && process.env.GITHUB_APP_INSTALLATION_ID && process.env.GITHUB_APP_PRIVATE_KEY)) ? 'configured' : 'not_configured', detail: 'Uses a read-only GitHub App installation token or GITHUB_TOKEN.' },
         { id: 'workspace', title: 'Google Workspace handoff', state: ((process.env.GOOGLE_WORKSPACE_ACCESS_TOKEN || (process.env.GOOGLE_WORKSPACE_CLIENT_ID && process.env.GOOGLE_WORKSPACE_CLIENT_SECRET && process.env.GOOGLE_WORKSPACE_REFRESH_TOKEN)) && process.env.GOOGLE_DRIVE_FOLDER_ID && process.env.GOOGLE_SHEETS_SPREADSHEET_ID) ? 'configured' : 'not_configured', detail: 'Drive report, idempotent Sheets row and Gmail draft only.' },
-        { id: 'object-storage', title: 'Immutable report object storage', state: process.env.NODE_ENV !== 'production' ? 'development' : process.env.LABLINEAGE_GCS_BUCKET ? 'configured' : 'not_configured', detail: process.env.NODE_ENV !== 'production' ? 'Atomic local object store is active.' : 'Google Cloud Storage with generation preconditions is required.' },
+        { id: 'object-storage', title: 'Immutable report object storage', state: objectStorageState, detail: objectStorageDetail },
         { id: 'adk', title: 'Google ADK Guardian Agent', state: (process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY) ? 'configured' : 'not_configured', detail: `Model: ${process.env.LABLINEAGE_MODEL || 'gemini-2.5-flash'}.` },
         { id: 'runtime', title: 'Runtime / Registry / Gateway', state: 'not_configured', detail: 'Cloud deployment and registry validation are still required.' }
       ]
@@ -641,12 +817,11 @@ export function buildApp() {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       state.evidence ||= [];
       state.projects.push(project);
       state.nodes.push({ id: project.id, projectId: project.id, type: 'Project', label: project.name, status: 'accepted', humanConfirmed: true, evidenceIds: [] });
-    });
-    await store.log({ action: 'create_project', actor: req.actor.subject, resource: `project/${project.id}`, details: `Created project ${project.slug}.` });
+    }, { action: 'create_project', actor: req.actor.subject, resource: `project/${project.id}`, details: `Created project ${project.slug}.` });
     res.status(201).json(project);
   });
 
@@ -690,11 +865,10 @@ export function buildApp() {
       createdAt: now,
       updatedAt: now
     };
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       state.sources ||= [];
       state.sources.push(source);
-    });
-    await store.log({
+    }, {
       action: 'register_source',
       actor: req.actor.subject,
       resource: `project/${req.params.projectId}/source/${source.id}`,
@@ -709,14 +883,13 @@ export function buildApp() {
     if (!source) return res.status(404).json({ error: 'Source not found' });
     if (!actorCanAccessProject(req.actor, source.projectId)) return res.status(403).json({ error: 'Project access denied' });
     if (source.status === 'disconnected') return res.json({ ...source, idempotent: true });
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       const current = state.sources.find((item) => item.id === source.id);
       current.status = 'disconnected';
       current.updatedAt = new Date().toISOString();
       current.disconnectedAt = current.updatedAt;
       current.disconnectedBy = req.actor.subject;
-    });
-    await store.log({
+    }, {
       action: 'disconnect_source',
       actor: req.actor.subject,
       resource: `project/${source.projectId}/source/${source.id}`,
@@ -772,10 +945,12 @@ export function buildApp() {
     const payloadSha256 = createHash('sha256').update(serializedPayload).digest('hex');
     const jobId = `job_${randomUUID()}`;
     const payloadObjectKey = `ingestion/${source.projectId}/${jobId}/attempt-0.json`;
-    const storedPayload = await createObjectStore({ dataDir: store.dataDir }).putImmutable({
+    const storedPayload = await putTrackedObject({
       key: payloadObjectKey,
       content: serializedPayload,
       contentType: 'application/json',
+      purpose: 'ingestion_payload',
+      projectId: source.projectId,
       metadata: {
         projectId: source.projectId,
         sourceId: source.id,
@@ -803,9 +978,14 @@ export function buildApp() {
       createdAt: now,
       updatedAt: now
     };
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       state.ingestionJobs ||= [];
       state.ingestionJobs.push(job);
+    }, {
+      action: 'queue_ingestion_bundle',
+      actor: req.actor.subject,
+      resource: `project/${source.projectId}/source/${source.id}/job/${job.id}`,
+      details: `Queued signed bundle ${manifestBody.bundle_id} for durable ingestion.`,
     });
     scheduleIngestionJob(job.id);
     res.status(202).location(`/v1/ingestion-jobs/${job.id}`).json(publicIngestionJob(job));
@@ -841,10 +1021,12 @@ export function buildApp() {
     const retrySequence = (job.retryCount || 0) + 1;
     const payloadSha256 = createHash('sha256').update(serialized).digest('hex');
     const payloadObjectKey = `ingestion/${job.projectId}/${job.id}/retry-${retrySequence}.json`;
-    const storedPayload = await createObjectStore({ dataDir: store.dataDir }).putImmutable({
+    const storedPayload = await putTrackedObject({
       key: payloadObjectKey,
       content: serialized,
       contentType: 'application/json',
+      purpose: 'ingestion_retry_payload',
+      projectId: job.projectId,
       metadata: {
         projectId: job.projectId,
         sourceId: job.sourceId,
@@ -854,7 +1036,7 @@ export function buildApp() {
         sha256: payloadSha256
       }
     });
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       const current = state.ingestionJobs.find((item) => item.id === job.id);
       current.errorHistory ||= [];
       if (current.error) current.errorHistory.push({ ...current.error, recordedAt: current.completedAt || current.updatedAt });
@@ -876,6 +1058,11 @@ export function buildApp() {
       delete current.completedAt;
       delete current.startedAt;
       delete current.nextAttemptAt;
+    }, {
+      action: 'retry_ingestion_job',
+      actor: req.actor.subject,
+      resource: `project/${job.projectId}/source/${job.sourceId}/job/${job.id}`,
+      details: `Queued corrected payload for ingestion retry ${retrySequence}.`,
     });
     scheduleIngestionJob(job.id);
     res.status(202).location(`/v1/ingestion-jobs/${job.id}`).json(
@@ -917,7 +1104,7 @@ export function buildApp() {
       createdAt: new Date().toISOString()
     };
     const evidenceId = `ev_${randomUUID()}`;
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       const current = state.edges.find((item) => item.id === edge.id);
       current.reviews ||= [];
       current.reviews.push(review);
@@ -938,8 +1125,7 @@ export function buildApp() {
           reviewer: review.reviewer
         }
       });
-    });
-    await store.log({
+    }, {
       action: 'review_lineage_edge',
       actor: req.actor.subject,
       resource: `project/${sourceNode.projectId}/edge/${edge.id}`,
@@ -990,11 +1176,10 @@ export function buildApp() {
       requestSha256: payloadHash,
       createdAt: new Date().toISOString()
     };
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       state.statusProposals ||= [];
       state.statusProposals.push(proposal);
-    });
-    await store.log({
+    }, {
       action: 'propose_asset_status',
       actor: req.actor.subject,
       resource: `project/${asset.projectId}/asset/${asset.id}`,
@@ -1011,11 +1196,8 @@ export function buildApp() {
     res.json({ nodes: graph.nodes, edges: graph.edges });
   });
   app.get('/v1/projects/:projectId/findings', requireProject, (req, res) => {
-    const graph = projectGraph(store.get(), req.params.projectId);
-    const ids = new Set(graph.nodes.map((node) => node.id));
     res.json(store.get().findings.filter((finding) => (
-      finding.status === 'open' &&
-      (finding.projectId === req.params.projectId || finding.affectedEntities.some((id) => ids.has(id)))
+      finding.status === 'open' && finding.projectId === req.params.projectId
     )));
   });
   app.post('/v1/projects/:projectId/findings/:findingId/resolve', requireProject, requireIdempotentWrite, async (req, res) => {
@@ -1023,15 +1205,13 @@ export function buildApp() {
       confirmation: z.literal('RESOLVE_FINDING'),
       note: z.string().trim().max(1000).optional()
     }).parse(req.body);
-    let resolved;
-    await store.update((state) => {
+    const { result: resolved } = await store.updateWithAudit((state) => {
       const finding = state.findings.find((item) => (
         item.id === req.params.findingId && item.projectId === req.params.projectId
       ));
       if (!finding) throw Object.assign(new Error('Finding not found'), { statusCode: 404 });
       if (finding.status === 'resolved') {
-        resolved = { finding, idempotent: true };
-        return;
+        return { finding, idempotent: true };
       }
       finding.status = 'resolved';
       finding.resolution = {
@@ -1039,16 +1219,13 @@ export function buildApp() {
         resolvedAt: new Date().toISOString(),
         note: input.note || 'Manually resolved after review.'
       };
-      resolved = { finding, idempotent: false };
-    });
-    if (!resolved.idempotent) {
-      await store.log({
+      return { finding, idempotent: false };
+    }, (result) => result.idempotent ? null : ({
         action: 'resolve_finding',
         actor: req.actor.subject,
         resource: `project/${req.params.projectId}/finding/${req.params.findingId}`,
         details: input.note || 'Manually resolved after review.'
-      });
-    }
+      }));
     res.status(resolved.idempotent ? 200 : 201).json(resolved);
   });
   app.get('/v1/projects/:projectId/evidence', requireProject, (req, res) => {
@@ -1077,17 +1254,20 @@ export function buildApp() {
   });
 
   app.post('/v1/projects/:projectId/nodes/:nodeId/confirm', requireProject, requireIdempotentWrite, async (req, res) => {
-    let found = false;
-    await store.update((state) => {
-      const node = state.nodes.find((item) => item.id === req.params.nodeId);
-      if (node) {
-        found = true;
-        node.humanConfirmed = true;
-        node.status = 'accepted';
-      }
+    z.object({}).strict().parse(req.body);
+    await store.updateWithAudit((state) => {
+      const node = state.nodes.find((item) => (
+        item.id === req.params.nodeId && item.projectId === req.params.projectId
+      ));
+      if (!node) throw Object.assign(new Error('Node not found'), { statusCode: 404 });
+      node.humanConfirmed = true;
+      node.status = 'accepted';
+    }, {
+      action: 'confirm_node',
+      actor: req.actor.subject,
+      resource: `project/${req.params.projectId}/node/${req.params.nodeId}`,
+      details: 'Human confirmed inferred node.',
     });
-    if (!found) return res.status(404).json({ error: 'Node not found' });
-    await store.log({ action: 'confirm_node', actor: req.actor.subject, resource: `project/${req.params.projectId}/node/${req.params.nodeId}`, details: 'Human confirmed inferred node.' });
     res.status(204).end();
   });
 
@@ -1115,14 +1295,18 @@ export function buildApp() {
     snapshot.baseline = !previous;
     const changes = diffSnapshots(previous, snapshot);
     snapshot.changes = changes;
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       state.snapshots.push(snapshot);
       applySnapshotRetention(state, req.params.projectId);
       const project = state.projects.find((item) => item.id === req.params.projectId);
       project.lastScan = snapshot.collectedAt;
       project.updatedAt = snapshot.collectedAt;
+    }, {
+      action: 'scan_directory',
+      actor: req.actor.subject,
+      resource: `project/${req.params.projectId}`,
+      details: `Captured ${snapshot.fileCount} files; ${changes.length} changes.`,
     });
-    await store.log({ action: 'scan_directory', actor: req.actor.subject, resource: `project/${req.params.projectId}`, details: `Captured ${snapshot.fileCount} files; ${changes.length} changes.` });
     res.status(201).json({ snapshot: snapshotSummaryForApi(snapshot), changes });
   });
   app.get('/v1/projects/:projectId/changes', requireProject, (req, res) => {
@@ -1180,9 +1364,10 @@ export function buildApp() {
   });
 
   app.post('/v1/projects/:projectId/audits', requireProject, requireIdempotentWrite, async (req, res) => {
+    z.object({}).strict().parse(req.body);
     const graph = projectGraph(store.get(), req.params.projectId);
     const audit = createAudit(req.params.projectId, graph.nodes, graph.edges);
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       state.audits.unshift({ ...audit, findings: undefined });
       const findingKey = (finding) => (
         `${finding.projectId}:${finding.type}:${[...finding.affectedEntities].sort().join(',')}`
@@ -1203,8 +1388,12 @@ export function buildApp() {
         }
         Object.assign(existing, finding, { status: 'open' });
       }
+    }, {
+      action: 'run_audit',
+      actor: req.actor.subject,
+      resource: `project/${req.params.projectId}`,
+      details: `Reproducibility ${audit.level} (${audit.score}/100), ${audit.findings.length} derived findings.`,
     });
-    await store.log({ action: 'run_audit', actor: req.actor.subject, resource: `project/${req.params.projectId}`, details: `Reproducibility ${audit.level} (${audit.score}/100), ${audit.findings.length} derived findings.` });
     res.status(201).json(audit);
   });
 
@@ -1218,10 +1407,9 @@ export function buildApp() {
     const client = await createGitHubClientFromEnv();
     const evidence = await client.collectRepository(input.owner, input.repo, input);
     const graph = githubEvidenceToGraph(req.params.projectId, evidence);
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       mergeGraphEvidence(state, graph);
-    });
-    await store.log({
+    }, {
       action: 'github_sync',
       actor: req.actor.subject,
       resource: `project/${req.params.projectId}`,
@@ -1259,10 +1447,9 @@ export function buildApp() {
       ? await (await createGitHubClientFromEnv()).collectRepository(input.owner, input.repo, input)
       : await new LocalGitClient().collectRepository(input.path, input);
     const graph = githubEvidenceToGraph(req.params.projectId, evidence);
-    await store.update((state) => {
+    await store.updateWithAudit((state) => {
       mergeGraphEvidence(state, graph);
-    });
-    await store.log({
+    }, {
       action: 'repository_sync',
       actor: req.actor.subject,
       resource: `project/${req.params.projectId}`,
@@ -1286,23 +1473,32 @@ export function buildApp() {
     const state = store.get();
     const root = state.nodes.find((node) => node.id === req.params.artifactId);
     if (!root) return res.status(404).json({ error: 'Artifact not found' });
-    const projectId = root.projectId || state.projects[0]?.id;
+    const projectId = root.projectId;
+    if (!projectId) return res.status(409).json({ error: 'Artifact has no project ownership' });
     if (!req.actor.projects.includes('*') && !req.actor.projects.includes(projectId)) {
       return res.status(403).json({ error: 'Project access denied' });
     }
+    const projectNodeIds = new Set(
+      state.nodes
+        .filter((node) => node.projectId === projectId || node.id === projectId)
+        .map((node) => node.id)
+    );
+    const projectEdges = state.edges.filter((edge) => (
+      projectNodeIds.has(edge.source) && projectNodeIds.has(edge.target)
+    ));
     const depth = Math.min(Number(req.query.depth || 4), 8);
     const ids = new Set([root.id]);
     for (let step = 0; step < depth; step += 1) {
-      for (const edge of state.edges) {
+      for (const edge of projectEdges) {
         if (ids.has(edge.source) || ids.has(edge.target)) {
           ids.add(edge.source);
           ids.add(edge.target);
         }
       }
     }
-    const nodes = state.nodes.filter((node) => ids.has(node.id));
-    const edges = state.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target));
-    const audit = createAudit(root.projectId || state.projects[0].id, nodes, edges);
+    const nodes = state.nodes.filter((node) => projectNodeIds.has(node.id) && ids.has(node.id));
+    const edges = projectEdges.filter((edge) => ids.has(edge.source) && ids.has(edge.target));
+    const audit = createAudit(projectId, nodes, edges);
     const evidenceIds = new Set([
       ...(root.evidenceIds || []),
       ...edges.flatMap((edge) => edge.evidenceIds || [])
@@ -1377,10 +1573,12 @@ export function buildApp() {
     ].join('\n');
     const sha256 = createHash('sha256').update(markdown).digest('hex');
     const objectKey = `reports/${handoff.projectId}/${handoff.id}/${reportId}.md`;
-    const storedObject = await createObjectStore({ dataDir: store.dataDir }).putImmutable({
+    const storedObject = await putTrackedObject({
       key: objectKey,
       content: markdown,
       contentType: 'text/markdown; charset=utf-8',
+      purpose: 'handoff_report',
+      projectId: handoff.projectId,
       metadata: {
         projectId: handoff.projectId,
         handoffId: handoff.id,
@@ -1407,11 +1605,10 @@ export function buildApp() {
       generatedBy: req.actor.subject,
       createdAt: new Date().toISOString()
     };
-    await store.update((draft) => {
+    await store.updateWithAudit((draft) => {
       draft.handoffReports ||= [];
       draft.handoffReports.push(report);
-    });
-    await store.log({
+    }, {
       action: 'generate_handoff_report',
       actor: req.actor.subject,
       resource: `project/${handoff.projectId}/handoff/${handoff.id}/report/${report.id}`,
@@ -1430,11 +1627,11 @@ export function buildApp() {
   });
 
   app.post('/v1/projects/:projectId/handoffs/export', requireProject, requireIdempotentWrite, async (req, res) => {
+    z.object({ confirmation: z.literal('CREATE_LOCAL_HANDOFF_PREVIEW') }).parse(req.body);
     const graph = projectGraph(store.get(), req.params.projectId);
     const summary = projectSummary(store.get(), req.params.projectId);
     const findings = store.get().findings.filter((finding) => finding.projectId === req.params.projectId && finding.status === 'open');
-    const outputDir = path.join(store.dataDir, 'exports', req.params.projectId, new Date().toISOString().replace(/[:.]/g, '-'));
-    await mkdir(outputDir, { recursive: true });
+    const exportId = `export_${randomUUID()}`;
     const report = [
       `# ${summary.name} — Research Handoff`,
       '', `Generated: ${new Date().toISOString()}`, '',
@@ -1454,13 +1651,41 @@ export function buildApp() {
       `A handoff report is ready for review. ${findings.length} open findings require attention.`,
       '', 'This is a local draft and has not been sent.'
     ].join('\r\n');
-    await Promise.all([
-      writeFile(path.join(outputDir, 'handoff-report.md'), report, 'utf8'),
-      writeFile(path.join(outputDir, 'findings.csv'), csv, 'utf8'),
-      writeFile(path.join(outputDir, 'gmail-draft.eml'), email, 'utf8')
-    ]);
-    await store.log({ action: 'export_handoff_preview', actor: req.actor.subject, resource: `project/${req.params.projectId}`, details: 'Created local report, CSV, and unsent email draft.' });
-    res.status(201).json({ status: 'preview_created', outputDir, files: ['handoff-report.md', 'findings.csv', 'gmail-draft.eml'], sent: false });
+    const files = [
+      ['handoff-report.md', report, 'text/markdown; charset=utf-8'],
+      ['findings.csv', csv, 'text/csv; charset=utf-8'],
+      ['gmail-draft.eml', email, 'message/rfc822'],
+    ];
+    const storedFiles = [];
+    for (const [name, content, contentType] of files) {
+      const stored = await putTrackedObject({
+        key: `exports/${req.params.projectId}/${exportId}/${name}`,
+        content,
+        contentType,
+        purpose: 'local_handoff_preview',
+        projectId: req.params.projectId,
+        metadata: { projectId: req.params.projectId, exportId, name },
+      });
+      storedFiles.push({ name, sha256: stored.sha256, sizeBytes: stored.sizeBytes });
+    }
+    const createdAt = new Date().toISOString();
+    await store.updateWithAudit((state) => {
+      state.handoffExports ||= [];
+      state.handoffExports.push({
+        id: exportId,
+        projectId: req.params.projectId,
+        files: storedFiles,
+        sent: false,
+        createdBy: req.actor.subject,
+        createdAt,
+      });
+    }, {
+      action: 'export_handoff_preview',
+      actor: req.actor.subject,
+      resource: `project/${req.params.projectId}/export/${exportId}`,
+      details: 'Created immutable local report, CSV, and unsent email draft.',
+    });
+    res.status(201).json({ status: 'preview_created', exportId, files: storedFiles, sent: false });
   });
 
   app.post('/v1/projects/:projectId/handoffs/workspace', requireProject, requireIdempotentWrite, async (req, res) => {
@@ -1490,16 +1715,16 @@ export function buildApp() {
     const auditId = state.audits.find((audit) => audit.projectId === req.params.projectId)?.id || input.idempotencyKey;
     let job;
     const staleAfterMs = Math.max(60_000, Number(process.env.LABLINEAGE_INTEGRATION_TIMEOUT_MS || 15_000) * 4);
-    await store.update((draft) => {
+    await store.updateWithAudit((draft) => {
       draft.workspaceExports ||= [];
       const previous = draft.workspaceExports.find((item) => item.idempotencyKey === input.idempotencyKey);
       if (previous?.status === 'workspace_exported') {
         job = { ...previous, completed: true };
-        return;
+        return job;
       }
       if (previous?.status === 'in_progress' && Date.now() - Date.parse(previous.updatedAt) < staleAfterMs) {
         job = { conflict: true };
-        return;
+        return job;
       }
       const next = previous || {
         idempotencyKey: input.idempotencyKey,
@@ -1516,7 +1741,13 @@ export function buildApp() {
       });
       if (!previous) draft.workspaceExports.push(next);
       job = { ...next };
-    });
+      return job;
+    }, (claim) => claim.completed || claim.conflict ? null : ({
+      action: 'workspace_export_started',
+      actor: req.actor.subject,
+      resource: `project/${req.params.projectId}`,
+      details: `Started or resumed Workspace export attempt ${claim.attempts}.`,
+    }));
     if (job.completed) {
       return res.json({
         status: job.status,
@@ -1532,13 +1763,15 @@ export function buildApp() {
       return res.status(409).json({ error: 'An export with this idempotency key is already in progress' });
     }
 
-    const saveProgress = async (patch) => {
+    const saveProgress = async (patch, audit = null) => {
       Object.assign(job, patch, { updatedAt: new Date().toISOString() });
-      await store.update((draft) => {
+      const mutator = (draft) => {
         const current = draft.workspaceExports.find((item) => item.idempotencyKey === input.idempotencyKey);
         if (!current) throw new Error('Workspace export claim was lost');
         Object.assign(current, patch, { updatedAt: job.updatedAt });
-      });
+      };
+      if (audit) await store.updateWithAudit(mutator, audit);
+      else await store.update(mutator);
     };
 
     try {
@@ -1570,20 +1803,28 @@ export function buildApp() {
         });
         await saveProgress({ gmailDraftId: gmail.id, gmailIdempotent: Boolean(gmail.idempotent) });
       }
-      await saveProgress({ status: 'workspace_exported', sent: false, completedAt: new Date().toISOString() });
+      await saveProgress(
+        { status: 'workspace_exported', sent: false, completedAt: new Date().toISOString() },
+        {
+          action: 'workspace_export',
+          actor: req.actor.subject,
+          resource: `project/${req.params.projectId}`,
+          details: `Created Drive report ${job.driveFileId}, ledger row ${auditId}, and Gmail draft ${job.gmailDraftId}; no email was sent.`,
+        }
+      );
     } catch (error) {
       await saveProgress({
         status: 'failed',
         failure: { at: new Date().toISOString(), message: String(error.message || 'Workspace export failed').slice(0, 300) }
+      }, {
+        action: 'workspace_export',
+        actor: req.actor.subject,
+        resource: `project/${req.params.projectId}`,
+        status: 'failed',
+        details: 'Workspace export failed after recording durable step progress.',
       }).catch(() => {});
       throw error;
     }
-    await store.log({
-      action: 'workspace_export',
-      actor: req.actor.subject,
-      resource: `project/${req.params.projectId}`,
-      details: `Created Drive report ${job.driveFileId}, ledger row ${auditId}, and Gmail draft ${job.gmailDraftId}; no email was sent.`
-    });
     res.status(201).json({
       status: job.status,
       idempotencyKey: job.idempotencyKey,
@@ -1624,15 +1865,19 @@ export const app = buildApp();
 if (path.resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
   const server = app.listen(port, host, () => {
     console.log(`LabLineage Guardian API listening on http://${host}:${port}`);
-    void recoverIngestionJobs().catch((error) => {
-      structuredLog('error', 'ingestion_recovery_failed', { error: error.message });
-    });
+    void Promise.all([recoverObjectReservations(), recoverIngestionJobs()])
+      .then(() => startIngestionRecoveryLoop())
+      .catch((error) => {
+        structuredLog('error', 'startup_recovery_failed', { error: error.message });
+        startIngestionRecoveryLoop();
+      });
   });
   let shuttingDown = false;
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
     structuredLog('info', 'shutdown_started', { signal });
+    stopIngestionRecoveryLoop();
     const forcedExit = setTimeout(() => process.exit(1), 10_000);
     forcedExit.unref();
     await new Promise((resolve) => server.close(resolve));

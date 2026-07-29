@@ -54,3 +54,41 @@ test('console routes have no serious or critical accessibility violations', asyn
   }
   expect(blocking, JSON.stringify(blocking, null, 2)).toEqual([]);
 });
+
+test('operator can import a manifest through the Upload Center', async ({ page }) => {
+  const bundleId = `playwright-${Date.now()}`;
+  await page.goto('/#/upload');
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'manifest.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({
+      schema_version: 'lablineage.manifest.v1',
+      bundle_id: bundleId,
+      project_key: 'phase-transition',
+      captured_at: new Date().toISOString(),
+      records: []
+    }))
+  });
+  await page.getByRole('button', { name: 'Upload & Validate' }).click();
+  await expect(page.getByText(new RegExp(`Imported 0 nodes, 0 edges and 0 evidence records from ${bundleId}`))).toBeVisible();
+});
+
+test('operator confirmation resolves a finding and records the UI transition', async ({ page }) => {
+  await page.goto('/#/findings');
+  await page.getByRole('button', { name: 'Run audit' }).click();
+  await expect(page.getByRole('button', { name: 'Run audit' })).toBeEnabled();
+  const resolveButtons = page.getByRole('button', { name: 'Resolve' });
+  const before = await resolveButtons.count();
+  expect(before).toBeGreaterThan(0);
+  page.once('dialog', (dialog) => dialog.accept());
+  await resolveButtons.first().click();
+  await expect(resolveButtons).toHaveCount(before - 1);
+});
+
+test('local handoff preview returns an immutable export identifier without sending', async ({ page }) => {
+  await page.goto('/#/handoff');
+  await page.getByRole('button', { name: 'Create local preview' }).click();
+  await expect(page.getByRole('status')).toContainText(
+    /Immutable local preview export_[a-f0-9-]+ created with 3 files\./
+  );
+});

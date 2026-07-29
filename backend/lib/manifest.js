@@ -1,5 +1,6 @@
 import { createHash, createPublicKey, randomUUID, verify } from 'node:crypto';
 import { z } from 'zod';
+import { scopeGraphToProject } from './project-identity.js';
 
 const recordSchema = z.object({
   record_type: z.enum(['asset', 'run', 'lineage_edge', 'code_version', 'parameter_set', 'environment']),
@@ -163,5 +164,9 @@ export function importManifest(raw, projectId, options = {}) {
       evidenceIds
     });
   }
-  return { manifest, nodes, edges, evidence: [...evidence.values()], signerFingerprint };
+  return {
+    manifest,
+    ...scopeGraphToProject(projectId, { nodes, edges, evidence: [...evidence.values()] }),
+    signerFingerprint
+  };
 }

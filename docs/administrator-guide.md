@@ -25,7 +25,7 @@ npm run dev
 
 ## 数据与对象存储
 
-按顺序执行 9 个迁移。导入任务载荷与交接报告写入不可变对象；应用状态和规范化表只保留私有对象引用、SHA-256、大小和生成版本。GCS Bucket 启用 30 天保留，生命周期默认 365 天；运行身份没有删除权限。
+按顺序执行 9 个迁移。迁移静态门禁还会拒绝 RLS 策略引用未声明的租户函数。导入任务载荷、交接报告和本地交接预览写入不可变对象；对象写入前先建立可恢复 reservation。应用状态和规范化表只保留私有对象引用、SHA-256、大小和生成版本。GCS Bucket 启用 30 天保留，生命周期默认 365 天；运行身份没有删除权限。
 
 ## Git 与仓库连接器
 
@@ -60,7 +60,7 @@ Terraform 可创建 Artifact Registry、GitHub OIDC Workload Identity Pool 和�
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOY_SERVICE_ACCOUNT`
 - `MIGRATION_JOB`（推荐设为 `lablineage-provision`）
 
-部署先推送不可变提交镜像，更新并执行迁移 Job，再更新 Cloud Run。100 秒内 readiness 未通过会自动恢复上一个镜像。
+Dockerfile 与 PostgreSQL service 均固定完整镜像 digest，Dependabot 每周提出受审更新。部署先推送提交标签，再从 Artifact Registry 解析 digest；迁移 Job 和 Cloud Run 只接收该 digest。100 秒内 readiness 未通过会自动恢复上一个镜像。
 
 ## 上线检查
 

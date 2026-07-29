@@ -255,3 +255,21 @@ test('verified collector rerun can produce R4 after manifest import', () => {
   }, 'p1');
   assert.equal(createAudit('p1', imported.nodes, imported.edges).level, 'R4');
 });
+
+test('manifest identities are isolated by project while retaining external IDs', () => {
+  const manifest = {
+    schema_version: 'lablineage.manifest.v1',
+    bundle_id: 'shared-bundle',
+    project_key: 'shared',
+    records: [
+      { record_type: 'asset', asset_id: 'same-id', evidence_ids: ['same-evidence'] }
+    ]
+  };
+  const first = importManifest(manifest, 'project-a');
+  const second = importManifest(manifest, 'project-b');
+  assert.equal(first.nodes[0].id, 'project-a::same-id');
+  assert.equal(second.nodes[0].id, 'project-b::same-id');
+  assert.notEqual(first.nodes[0].id, second.nodes[0].id);
+  assert.equal(first.nodes[0].details.externalId, 'same-id');
+  assert.equal(first.evidence[0].id, 'project-a::same-evidence');
+});

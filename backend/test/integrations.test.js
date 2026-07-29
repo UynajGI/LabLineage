@@ -37,7 +37,7 @@ test('GitHub connector maps commits and workflow runs without exposing token', a
   assert.equal(graph.nodes.length, 3);
   assert.equal(graph.evidence.length, 3);
   assert.equal(evidence.pullRequests.length, 1);
-  assert.equal(graph.edges[0].source, 'git_abc');
+  assert.equal(graph.edges[0].source, 'p1::git_abc');
   assert.equal(graph.edges.some((edge) => edge.relation === 'proposed_in'), true);
   assert.ok(calls.every((call) => call.authorization === 'Bearer secret-token'));
   assert.equal(JSON.stringify(evidence).includes('secret-token'), false);
@@ -66,8 +66,8 @@ test('GitHub webhook payload maps incrementally without an API round trip', () =
     }
   });
   assert.equal(graph.evidence[0].evidenceType, 'github_workflow_run');
-  assert.equal(graph.nodes.some((node) => node.id === 'git_deadbeef'), true);
-  assert.equal(graph.edges[0].source, 'git_deadbeef');
+  assert.equal(graph.nodes.some((node) => node.id === 'project-1::git_deadbeef'), true);
+  assert.equal(graph.edges[0].source, 'project-1::git_deadbeef');
 });
 
 test('GitHub App credentials exchange a short-lived installation token', async () => {

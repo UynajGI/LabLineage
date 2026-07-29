@@ -32,13 +32,13 @@ async function canonicalAllowedRepository(inputPath, allowedRoots) {
   if (!inputPath) throw Object.assign(new Error('Local Git path is required'), { statusCode: 400 });
   const candidate = await realpath(resolve(inputPath)).catch(() => null);
   if (!candidate) throw Object.assign(new Error('Local Git repository is unavailable'), { statusCode: 404 });
-  const roots = await Promise.all(
+  const roots = (await Promise.all(
     allowedRoots.map((item) => realpath(resolve(item)).catch(() => null))
-  );
-  if (!roots.filter(Boolean).some((root) => withinRoot(candidate, root))) {
+  )).filter(Boolean);
+  if (!roots.some((root) => withinRoot(candidate, root))) {
     throw Object.assign(new Error('Local Git repository is outside LABLINEAGE_LOCAL_GIT_ROOTS'), { statusCode: 403 });
   }
-  return candidate;
+  return { candidate, roots };
 }
 
 async function git(root, args, { timeoutMs = DEFAULT_TIMEOUT_MS, maxBuffer = 16 * 1024 * 1024 } = {}) {
@@ -147,9 +147,9 @@ export class LocalGitClient {
     if (!this.allowedRoots.length) {
       throw Object.assign(new Error('LABLINEAGE_LOCAL_GIT_ROOTS must allow at least one repository root'), { statusCode: 503 });
     }
-    const requestedRoot = await canonicalAllowedRepository(inputPath, this.allowedRoots);
+    const { candidate: requestedRoot, roots: allowedRoots } = await canonicalAllowedRepository(inputPath, this.allowedRoots);
     const root = await realpath(await git(requestedRoot, ['rev-parse', '--show-toplevel'], { timeoutMs: this.timeoutMs }));
-    if (!this.allowedRoots.some((item) => withinRoot(root, resolve(item)))) {
+    if (!allowedRoots.some((allowedRoot) => withinRoot(root, allowedRoot))) {
       throw Object.assign(new Error('Resolved Git root is outside LABLINEAGE_LOCAL_GIT_ROOTS'), { statusCode: 403 });
     }
     const resolvedBranch = branch || await git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { timeoutMs: this.timeoutMs })

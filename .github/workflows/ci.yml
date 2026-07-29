@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17.10-alpine@sha256:dc17045ccfd343b49600570ea734b9c4991cf1c3f3302e67df51e3b402dd55c4
         env:
           POSTGRES_DB: lablineage_test
           POSTGRES_USER: lablineage
@@ -50,7 +50,7 @@ jobs:
         env:
           LABLINEAGE_TEST_DATABASE_ADMIN_URL: postgresql://lablineage:test-only-password@127.0.0.1:5432/lablineage_test
           LABLINEAGE_TEST_DATABASE_APP_URL: postgresql://lablineage_app_test:app-test-only-password@127.0.0.1:5432/lablineage_test
-      - run: npm audit --omit=dev --audit-level=critical --registry=https://registry.npmjs.org
+      - run: npm audit --omit=dev --omit=optional --audit-level=critical --registry=https://registry.npmjs.org
       - name: Build production image
         run: docker build --tag lablineage-guardian:${{ github.sha }} .
       - name: Scan production image for critical vulnerabilities

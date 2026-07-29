@@ -11,11 +11,22 @@ if (JSON.stringify(expectedNames) !== JSON.stringify(actualNames)) {
 }
 const sql = (await Promise.all(files.map((name) => readFile(path.join(directory, name), 'utf8')))).join('\n');
 const tenantTables = new Set();
+const declaredFunctions = new Set(
+  [...sql.matchAll(/CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\s+([a-z_][a-z0-9_]*)\s*\(/gi)]
+    .map((match) => match[1].toLowerCase())
+);
+const tenantFunctionReferences = new Set(
+  [...sql.matchAll(/\b([a-z_][a-z0-9_]*tenant[a-z0-9_]*)\s*\(\s*\)/gi)]
+    .map((match) => match[1].toLowerCase())
+);
 for (const match of sql.matchAll(/CREATE TABLE\s+([a-z_][a-z0-9_]*)\s*\(([\s\S]*?)\);/gi)) {
   if (/\btenant_id\b/i.test(match[2])) tenantTables.add(match[1].toLowerCase());
 }
 tenantTables.add('project_memberships');
 const missing = [];
+for (const functionName of tenantFunctionReferences) {
+  if (!declaredFunctions.has(functionName)) missing.push(`undefined tenant policy function: ${functionName}()`);
+}
 for (const table of [...tenantTables].sort()) {
   if (!new RegExp(`ALTER TABLE\\s+${table}\\s+ENABLE ROW LEVEL SECURITY`, 'i').test(sql)) {
     missing.push(`${table}: ENABLE RLS`);

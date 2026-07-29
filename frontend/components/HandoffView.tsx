@@ -34,7 +34,7 @@ export const HandoffView: React.FC = () => {
     setError('');
     try {
       const result = await api.executeHandoffActions();
-      setMessage(`Local preview created: ${result.outputDir}`);
+      setMessage(`Immutable local preview ${result.exportId} created with ${result.files.length} files.`);
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'Local preview failed');
     } finally {
@@ -57,7 +57,7 @@ export const HandoffView: React.FC = () => {
   };
 
   if (!config || !preview) {
-    return <div className="flex justify-center p-12">{error ? <p className="text-red-700">{error}</p> : <Loader2 className="animate-spin text-blue-500" size={32} />}</div>;
+    return <div className="flex justify-center p-12">{error ? <p role="alert" className="text-red-700">{error}</p> : <Loader2 className="animate-spin text-blue-500" size={32} />}</div>;
   }
 
   return (
@@ -96,8 +96,8 @@ export const HandoffView: React.FC = () => {
         </label>
       )}
 
-      {error && <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">{error}</div>}
-      {message && <div className="flex gap-2 bg-green-50 border border-green-200 rounded-lg p-4 text-green-800"><CheckCircle2 size={20} />{message}</div>}
+      {error && <div role="alert" className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">{error}</div>}
+      {message && <div role="status" className="flex gap-2 bg-green-50 border border-green-200 rounded-lg p-4 text-green-800"><CheckCircle2 size={20} />{message}</div>}
 
       <div className="flex flex-wrap gap-3 justify-end">
         <button disabled={busy} onClick={createLocalPreview} className="px-5 py-2.5 rounded-md border border-slate-300 bg-white text-slate-800 disabled:opacity-50">

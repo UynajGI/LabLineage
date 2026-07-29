@@ -16,7 +16,7 @@ npm run dev
 
 Then open [http://localhost:5173/#/checklist](http://localhost:5173/#/checklist). The development command waits for the API health check before starting Vite, and read-only requests tolerate a brief API watch restart. API health is at [http://127.0.0.1:8788/api/health](http://127.0.0.1:8788/api/health); dependency readiness is at [http://127.0.0.1:8788/api/ready](http://127.0.0.1:8788/api/ready).
 
-The machine-readable OpenAPI 3.1 contract is available at [http://127.0.0.1:8788/api/openapi.json](http://127.0.0.1:8788/api/openapi.json), and `/api/version` reports API, implementation, Manifest, and Collector runtime compatibility versions. CI fails if any implemented `/v1` operation is missing from the contract.
+The machine-readable OpenAPI 3.1 contract is available at [http://127.0.0.1:8788/api/openapi.json](http://127.0.0.1:8788/api/openapi.json), and `/api/version` reports API, implementation, Manifest, and Collector runtime compatibility versions. CI fails if any implemented `/v1` operation is missing or if a write request or successful response still uses a placeholder contract.
 
 The scanner, graph, audit and local handoff preview work without a model key. Agent chat requires `GOOGLE_GENAI_API_KEY` or `GEMINI_API_KEY`. For a Vertex AI Express Mode `AQ.` key, keep `LABLINEAGE_VERTEX_EXPRESS=TRUE`; `LABLINEAGE_PROXY=http://127.0.0.1:17891` routes model traffic through the requested local proxy.
 
@@ -80,6 +80,7 @@ failures are retried with bounded exponential backoff.
 - Use a read-only GitHub App installation and Workspace OAuth scopes limited to Drive files, Sheets values and Gmail drafts.
 - Allow local Git only through `LABLINEAGE_LOCAL_GIT_ROOTS`; repository evidence never exports raw file paths.
 - Build with `Dockerfile`, or use `compose.yaml` for a local PostgreSQL production-shaped environment.
+- Base images and browser dependencies are digest/version pinned; production deployment resolves the pushed Artifact Registry tag to a digest before migration or rollout.
 - Provision Artifact Registry and GitHub OIDC with Terraform, then use the protected `Deploy` workflow for staging or production.
 
 See the [user guide](docs/user-guide.md), [administrator guide](docs/administrator-guide.md), [full-scope completion matrix](docs/full-scope-completion-matrix.md), [API and data contracts](docs/api-and-data-contracts.md), [operations runbook](docs/operations-runbook.md), [threat model](docs/threat-model.md), [dependency risk register](docs/dependency-risk-register.md), and [architecture](docs/architecture.md).
@@ -89,7 +90,7 @@ See the [user guide](docs/user-guide.md), [administrator guide](docs/administrat
 ```powershell
 npm run test:all
 npm run build
-npm audit --omit=dev --audit-level=critical
+npm audit --omit=dev --omit=optional --audit-level=critical
 ```
 
 Git uses repository-local `pre-commit`, `commit-msg`, `pre-push`, and `post-commit` hooks. `pre-push` runs the complete local validation, including E2E/accessibility. Reinstall them with `node scripts/install-git-hooks.mjs`.

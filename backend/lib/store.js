@@ -87,6 +87,8 @@ export function makeDemoState() {
     ingestionJobs: [],
     statusProposals: [],
     handoffReports: [],
+    handoffExports: [],
+    objectReservations: [],
     idempotencyRecords: [],
     snapshots: [],
     evidence: nodes.flatMap((node) => (node.evidenceIds || []).map((id) => ({
@@ -167,6 +169,14 @@ export function normalizeStateOwnership(state) {
     state.idempotencyRecords = [];
     changed = true;
   }
+  if (!state.objectReservations) {
+    state.objectReservations = [];
+    changed = true;
+  }
+  if (!state.handoffExports) {
+    state.handoffExports = [];
+    changed = true;
+  }
   if (state.projects?.length !== 1) return changed;
   const projectId = state.projects[0].id;
   for (const collection of ['nodes', 'findings', 'audits', 'evidence']) {
@@ -208,6 +218,31 @@ export function normalizeStateOwnership(state) {
   return changed;
 }
 
+export function appendAuditEvent(state, {
+  action,
+  resource,
+  status = 'success',
+  details,
+  userSubject,
+  actor,
+  traceId,
+}) {
+  const event = {
+    id: `ae_${randomUUID()}`,
+    timestamp: new Date().toISOString(),
+    traceId: traceId || `trace_${randomUUID()}`,
+    userSubject: userSubject || actor || 'local-user',
+    action,
+    resource,
+    status,
+    details,
+  };
+  state.auditEvents ||= [];
+  state.auditEvents.unshift(event);
+  state.auditEvents = state.auditEvents.slice(0, 500);
+  return event;
+}
+
 export class JsonStore {
   constructor(dataDir = defaultDataDir) {
     this.dataDir = dataDir;
@@ -245,47 +280,61 @@ export class JsonStore {
   }
 
   async update(mutator) {
-    const result = await mutator(this.get());
-    await this.persist();
+    let result;
+    const operation = this.writeChain.then(async () => {
+      const nextState = structuredClone(this.get());
+      result = await mutator(nextState);
+      await this.persistNow(nextState);
+      this.state = nextState;
+    });
+    this.writeChain = operation.catch(() => {});
+    await operation;
     return result;
   }
 
-  async persist() {
-    this.writeChain = this.writeChain.then(async () => {
-      await mkdir(this.dataDir, { recursive: true });
-      const temporary = `${this.file}.${process.pid}.${randomUUID()}.tmp`;
-      await writeFile(temporary, `${JSON.stringify(this.get(), null, 2)}\n`, 'utf8');
-      try {
-        for (let attempt = 0; ; attempt += 1) {
-          try {
-            await rename(temporary, this.file);
-            break;
-          } catch (error) {
-            if (!['EACCES', 'EPERM'].includes(error.code) || attempt >= 5) throw error;
-            await new Promise((resolve) => setTimeout(resolve, 20 * (2 ** attempt)));
-          }
-        }
-      } finally {
-        await rm(temporary, { force: true }).catch(() => {});
+  async updateWithAudit(mutator, audit) {
+    let event;
+    const result = await this.update((state) => {
+      const value = mutator(state);
+      if (value && typeof value.then === 'function') {
+        throw new Error('updateWithAudit mutators must be synchronous');
       }
+      const auditRecord = typeof audit === 'function' ? audit(value, state) : audit;
+      if (auditRecord) event = appendAuditEvent(state, auditRecord);
+      return value;
     });
-    return this.writeChain;
+    return { result, event };
+  }
+
+  async persist() {
+    const operation = this.writeChain.then(() => this.persistNow(this.get()));
+    this.writeChain = operation.catch(() => {});
+    return operation;
+  }
+
+  async persistNow(state = this.get()) {
+    await mkdir(this.dataDir, { recursive: true });
+    const temporary = `${this.file}.${process.pid}.${randomUUID()}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+    try {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await rename(temporary, this.file);
+          break;
+        } catch (error) {
+          if (!['EACCES', 'EPERM'].includes(error.code) || attempt >= 5) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 20 * (2 ** attempt)));
+        }
+      }
+    } finally {
+      await rm(temporary, { force: true }).catch(() => {});
+    }
   }
 
   async log({ action, resource, status = 'success', details, userSubject, actor }) {
-    const event = {
-      id: `ae_${randomUUID()}`,
-      timestamp: new Date().toISOString(),
-      traceId: `trace_${randomUUID()}`,
-      userSubject: userSubject || actor || 'local-user',
-      action,
-      resource,
-      status,
-      details
-    };
+    let event;
     await this.update((state) => {
-      state.auditEvents.unshift(event);
-      state.auditEvents = state.auditEvents.slice(0, 500);
+      event = appendAuditEvent(state, { action, resource, status, details, userSubject, actor });
     });
     return event;
   }
@@ -294,9 +343,7 @@ export class JsonStore {
 export function projectSummary(state, projectId) {
   const project = state.projects.find((item) => item.id === projectId);
   if (!project) return null;
-  const projectNodes = state.nodes.filter((node) =>
-    node.id === projectId || node.projectId === projectId || projectId === 'project_phase_transition'
-  );
+  const projectNodes = state.nodes.filter((node) => node.id === projectId || node.projectId === projectId);
   const scoreCounts = { R0: 0, R1: 0, R2: 0, R3: 0, R4: 0 };
   for (const node of projectNodes) {
     if (node.reproducibility) scoreCounts[node.reproducibility] += 1;

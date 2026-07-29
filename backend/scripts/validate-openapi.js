@@ -18,9 +18,48 @@ const documented = new Set(
 );
 const missing = [...implemented].filter((item) => !documented.has(item));
 const stale = [...documented].filter((item) => !implemented.has(item));
+
+function hasPlaceholder(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (value['x-contract-placeholder'] === true) return true;
+  return Object.values(value).some(hasPlaceholder);
+}
+
+const placeholderOperations = [];
+const incompleteWrites = [];
+const incompleteSuccessResponses = [];
+for (const [route, operations] of Object.entries(openApiDocument.paths)) {
+  for (const [method, operation] of Object.entries(operations)) {
+    const key = `${method} ${route}`;
+    if (hasPlaceholder(operation)) placeholderOperations.push(key);
+    if (['post', 'put', 'patch', 'delete'].includes(method)) {
+      const schema = operation.requestBody?.content?.['application/json']?.schema;
+      if (!schema || hasPlaceholder(schema)) incompleteWrites.push(key);
+    }
+    for (const [status, response] of Object.entries(operation.responses || {})) {
+      if (!status.startsWith('2') || status === '204') continue;
+      const schema = response.content?.['application/json']?.schema
+        || response.content?.['text/plain']?.schema;
+      if (!schema || hasPlaceholder(schema)) incompleteSuccessResponses.push(`${key} -> ${status}`);
+    }
+  }
+}
+
 await SwaggerParser.validate(openApiDocument);
-if (missing.length || stale.length) {
-  console.error(JSON.stringify({ missing, stale }, null, 2));
+if (
+  missing.length
+  || stale.length
+  || placeholderOperations.length
+  || incompleteWrites.length
+  || incompleteSuccessResponses.length
+) {
+  console.error(JSON.stringify({
+    missing,
+    stale,
+    placeholderOperations,
+    incompleteWrites,
+    incompleteSuccessResponses
+  }, null, 2));
   process.exitCode = 1;
 } else {
   console.log(JSON.stringify({

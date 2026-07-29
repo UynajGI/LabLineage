@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { importPKCS8, SignJWT } from 'jose';
+import { scopeGraphToProject } from '../project-identity.js';
 
 export class GitHubClient {
   constructor({ token, baseUrl = 'https://api.github.com', fetchImpl = fetch } = {}) {
@@ -258,7 +259,7 @@ export function githubEvidenceToGraph(projectId, evidence) {
       });
     }
   }
-  return { nodes, edges, evidence: evidenceRecords };
+  return scopeGraphToProject(projectId, { nodes, edges, evidence: evidenceRecords });
 }
 
 export function githubWebhookToGraph(projectId, eventName, payload) {
