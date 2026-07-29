@@ -8,6 +8,10 @@
 
 不要第一次就扫描生产共享盘或敏感数据。先选择一个你熟悉、规模较小、包含数据、代码、配置和输出的副本。
 
+如果还没有真实项目，直接使用仓库中的
+[`examples/reference-study`](../examples/reference-study/README.md)。它是一个无第三方依赖、
+结果确定的练习项目，足够完成下面所有步骤。
+
 ## 1. 准备目录
 
 示例结构：
@@ -81,6 +85,30 @@ npm run collector -- verify $env:TEMP\my-first-project-manifest.json
 
 如果再次执行 `init`，工具会拒绝覆盖已有项目密钥；这是正确的安全行为。
 
+`scan` 只能建立文件清单和静态推断，不能证明某个 Run 真正使用了哪些文件。
+要建立完整运行主干，请让 Collector 启动一次命令：
+
+```bash
+npm run collector -- run --project my-first-project --root /path/to/my-first-project \
+  -- python scripts/plot.py data/measurements.csv configs/paper.yaml outputs/figure.png
+```
+
+命令中明确出现并且位于项目目录内的代码、数据和配置会连接到同一个 Run；
+运行期间被新建或重写的文件会作为输出连接到该 Run。关系均带 evidence ID。
+如果脚本不接受数据、配置或输出路径参数，Collector 只能使用静态分析得到较弱的
+`strong` 关系，动态路径可能仍需要人工补证。
+
+第一次 Run 建立基线。命令结束时会显示其 snapshot ID；使用它再运行一次，可以
+验证确定性输出：
+
+```bash
+npm run collector -- run --project my-first-project --root /path/to/my-first-project \
+  --expected SNAPSHOT_ID --label verified-rerun \
+  -- python scripts/plot.py data/measurements.csv configs/paper.yaml outputs/figure.png
+```
+
+只有退出码为零、确实重写了输出、且输出哈希与基线一致时，结果才可能达到 R4。
+
 ## 4. 导入 Manifest
 
 在控制台选择 `My First Project`，打开 **Upload Center**：
@@ -100,8 +128,13 @@ npm run collector -- verify $env:TEMP\my-first-project-manifest.json
    `Evidence IDs`。
 2. 在 **Connected relationships** 中打开它与 Run 的关系，核对
    `From`、`To`、`Relation`、`Confidence` 和关系 `Evidence IDs`。
-3. 返回图中点击该 Run，在 **Connected relationships** 中检查它是否有预期的
-   CodeVersion、Dataset、ParameterSet、Environment 和输出。
+3. 返回图中点击该 Run，在 **Connected relationships** 中逐条检查：
+   - `executed_code` 的来源类型是 CodeVersion；
+   - `used_input` 的来源类型是 Dataset；
+   - `used_parameter_set` 的来源类型是 ParameterSet；
+   - `captured_environment` 的来源类型是 Environment；
+   - `generated` 指向预期输出；
+   - 每条关系都有 evidence ID。
 4. 对照真实命令和文件回答：
    - Python/Notebook/日志解析出的读写关系是否符合事实？
    - 配置中的数值和布尔参数是否出现，敏感字符串是否被排除？

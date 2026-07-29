@@ -5,6 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { canonicalJson } from './canonical.js';
 import { detectGit } from './git.js';
+import { assetId } from './identifiers.js';
 import { artifactType, imageMetadata, parseConfig, parseLog, parseNotebook, parsePython } from './parsers.js';
 
 const DEFAULT_EXCLUDES = [
@@ -89,10 +90,6 @@ function openIndex(filename) {
 
 function pathToken(projectKey, relative, salt) {
   return `pth_${createHmac('sha256', salt).update(`${projectKey}\0${relative}`).digest('hex').slice(0, 32)}`;
-}
-
-function assetId(projectKey, relative) {
-  return `ast_${createHash('sha256').update(`${projectKey}\0${relative}`).digest('hex').slice(0, 32)}`;
 }
 
 async function readSlice(filename, position, length) {
@@ -261,6 +258,7 @@ export async function collectSnapshot(options) {
             record_type: 'parameter_set',
             asset_id: parameterSetId,
             name: `${path.basename(file.relative)} parameters`,
+            source_asset_id: id,
             parameters: evidence.parameters,
             parser: evidence.parser,
             evidence_ids: [evidenceId]

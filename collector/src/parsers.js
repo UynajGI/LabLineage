@@ -238,7 +238,7 @@ export function imageMetadata(bytes, filePath) {
 export function artifactType(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   if (['.png', '.jpg', '.jpeg', '.svg', '.pdf'].includes(extension)) return 'figure';
-  if (['.py', '.ipynb', '.r', '.jl', '.sh'].includes(extension)) return 'code';
+  if (['.py', '.ipynb', '.r', '.jl', '.sh', '.js', '.mjs', '.cjs', '.ts'].includes(extension)) return 'code';
   if (['.json', '.yaml', '.yml', '.toml', '.ini', '.cfg'].includes(extension)) return 'config';
   if (['.csv', '.tsv', '.parquet'].includes(extension)) return 'dataset';
   if (['.log', '.out', '.err'].includes(extension)) return 'log';

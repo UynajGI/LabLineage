@@ -121,8 +121,23 @@ test('snapshot retention compresses cold indexes without losing the audit chain'
 test('reproducibility scoring is deterministic', () => {
   const types = ['CodeVersion', 'Dataset', 'ParameterSet', 'Environment', 'Run', 'Figure'];
   const nodes = types.map((type, index) => ({ id: `n${index}`, type }));
-  const edges = [{ source: 'n0', target: 'n4', confidence: 'exact' }];
-  assert.deepEqual(scoreReproducibility(nodes, edges), {
+  const edges = [
+    ...[
+      ['n0', 'executed_code'],
+      ['n1', 'used_input'],
+      ['n2', 'used_parameter_set'],
+      ['n3', 'captured_environment']
+    ].map(([source, relation]) => ({
+      source,
+      target: 'n4',
+      relation,
+      confidence: 'exact',
+      evidenceIds: [`ev_${source}`]
+    })),
+    { source: 'n4', target: 'n5', relation: 'generated', confidence: 'exact', evidenceIds: ['ev_output'] }
+  ];
+  const expected = {
+    resultId: 'n5',
     score: 100,
     level: 'R3',
     verifiedRerun: false,
@@ -130,12 +145,16 @@ test('reproducibility scoring is deterministic', () => {
       { key: 'code_version', weight: 20, passed: true },
       { key: 'input_dataset', weight: 15, passed: true },
       { key: 'parameter_set', weight: 15, passed: true },
-      { key: 'environment_lock', weight: 15, passed: true },
+      { key: 'environment_capture', weight: 15, passed: true },
       { key: 'captured_run', weight: 15, passed: true },
       { key: 'generated_output', weight: 10, passed: true },
       { key: 'lineage_evidence', weight: 10, passed: true }
     ],
     missing: ['verified_rerun']
+  };
+  assert.deepEqual(scoreReproducibility(nodes, edges), {
+    ...expected,
+    resultScores: [expected]
   });
   assert.equal(createAudit('p1', nodes, edges).level, 'R3');
 });
@@ -156,12 +175,46 @@ test('R4 requires a controlled rerun with exact output hash evidence', () => {
   ];
   const edges = [
     { source: 'code', target: 'rerun', relation: 'executed_as', confidence: 'exact', evidenceIds: ['ev_code'] },
+    { source: 'data', target: 'rerun', relation: 'used_input', confidence: 'exact', evidenceIds: ['ev_data'] },
+    { source: 'params', target: 'rerun', relation: 'used_parameter_set', confidence: 'exact', evidenceIds: ['ev_params'] },
+    { source: 'env', target: 'rerun', relation: 'captured_environment', confidence: 'exact', evidenceIds: ['ev_env'] },
     { source: 'rerun', target: 'figure', relation: 'generated', confidence: 'exact', evidenceIds: ['ev_output_hash'] }
   ];
   const result = scoreReproducibility(nodes, edges);
   assert.equal(result.level, 'R4');
   assert.equal(result.verifiedRerun, true);
   assert.equal(result.missing.includes('verified_rerun'), false);
+});
+
+test('reproducibility does not borrow disconnected evidence from another result', () => {
+  const nodes = [
+    { id: 'code', type: 'CodeVersion' },
+    { id: 'data', type: 'Dataset' },
+    { id: 'params', type: 'ParameterSet' },
+    { id: 'env', type: 'Environment' },
+    { id: 'run', type: 'Run' },
+    { id: 'figure', type: 'Figure' }
+  ];
+  const result = scoreReproducibility(nodes, [
+    { source: 'run', target: 'figure', relation: 'generated', confidence: 'exact', evidenceIds: ['ev_output'] }
+  ]);
+  assert.equal(result.resultId, 'figure');
+  assert.equal(result.score, 35);
+  assert.deepEqual(result.missing.slice(0, 4), ['code_version', 'input_dataset', 'parameter_set', 'environment_capture']);
+});
+
+test('project reproducibility exposes every result and reports the weakest result', () => {
+  const nodes = [
+    { id: 'run', type: 'Run' },
+    { id: 'good', type: 'Figure' },
+    { id: 'orphan', type: 'Figure' }
+  ];
+  const result = scoreReproducibility(nodes, [
+    { source: 'run', target: 'good', relation: 'generated', confidence: 'exact', evidenceIds: ['ev_good'] }
+  ]);
+  assert.equal(result.resultId, 'orphan');
+  assert.equal(result.score, 10);
+  assert.deepEqual(result.resultScores.map((score) => score.resultId), ['good', 'orphan']);
 });
 
 test('manifest import validates schema and maps records to graph data', () => {
@@ -237,6 +290,38 @@ test('verified collector rerun can produce R4 after manifest import', () => {
       asset_type: 'figure',
       name: 'figure',
       rerun_hash_match: true
+    },
+    {
+      record_type: 'lineage_edge',
+      from_entity_id: 'code',
+      to_entity_id: 'rerun',
+      relation_type: 'executed_code',
+      confidence_label: 'exact',
+      evidence_ids: ['ev_code']
+    },
+    {
+      record_type: 'lineage_edge',
+      from_entity_id: 'data',
+      to_entity_id: 'rerun',
+      relation_type: 'used_input',
+      confidence_label: 'exact',
+      evidence_ids: ['ev_data']
+    },
+    {
+      record_type: 'lineage_edge',
+      from_entity_id: 'params',
+      to_entity_id: 'rerun',
+      relation_type: 'used_parameter_set',
+      confidence_label: 'exact',
+      evidence_ids: ['ev_params']
+    },
+    {
+      record_type: 'lineage_edge',
+      from_entity_id: 'env',
+      to_entity_id: 'rerun',
+      relation_type: 'captured_environment',
+      confidence_label: 'exact',
+      evidence_ids: ['ev_env']
     },
     {
       record_type: 'lineage_edge',

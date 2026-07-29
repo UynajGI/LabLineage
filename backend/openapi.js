@@ -744,8 +744,10 @@ export const openApiDocument = {
         properties: {
           id: { type: 'string' },
           projectId: { type: 'string' },
+          resultId: { type: ['string', 'null'] },
           level: { enum: ['R0', 'R1', 'R2', 'R3', 'R4'] },
           score: { type: 'number', minimum: 0, maximum: 100 },
+          resultScores: { type: 'array', items: { type: 'object' } },
           findings: { type: 'array', items: { $ref: '#/components/schemas/Finding' } }
         }
       },
@@ -771,7 +773,18 @@ export const openApiDocument = {
           nodes: { type: 'array', items: { $ref: '#/components/schemas/LineageNode' } },
           edges: { type: 'array', items: { $ref: '#/components/schemas/LineageEdge' } },
           evidence: { type: 'array', items: { $ref: '#/components/schemas/Evidence' } },
-          reproducibility: { type: 'object' }
+          reproducibility: {
+            type: 'object',
+            required: ['resultId', 'level', 'score', 'verifiedRerun', 'missing', 'resultScores'],
+            properties: {
+              resultId: { type: ['string', 'null'] },
+              level: { enum: ['R0', 'R1', 'R2', 'R3', 'R4'] },
+              score: { type: 'number', minimum: 0, maximum: 100 },
+              verifiedRerun: { type: 'boolean' },
+              missing: { type: 'array', items: { type: 'string' } },
+              resultScores: { type: 'array', items: { type: 'object' } }
+            }
+          }
         }
       },
       AgentResult: {

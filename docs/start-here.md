@@ -20,6 +20,9 @@ LabLineage Guardian 用证据回答三个问题：
 | 开发者 | 启动工作区、运行测试并提交代码 | [README](../README.md) |
 
 不确定时，从 10 分钟体验开始。它只使用演示数据，不会扫描你的目录，也不需要模型密钥。
+没有真实项目但想验证采集能力时，使用
+[`examples/reference-study`](../examples/reference-study/README.md)；实现约束见
+[Run lineage v1 技术设计](run-lineage-v1.md)。
 
 ## 一张图理解工作流
 

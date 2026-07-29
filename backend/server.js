@@ -1504,7 +1504,20 @@ export function buildApp() {
       ...edges.flatMap((edge) => edge.evidenceIds || [])
     ]);
     const evidence = (state.evidence || []).filter((item) => item.projectId === projectId && evidenceIds.has(item.id));
-    res.json({ root, nodes, edges, evidence, reproducibility: { level: audit.level, score: audit.score, verifiedRerun: audit.verifiedRerun, missing: audit.missing } });
+    res.json({
+      root,
+      nodes,
+      edges,
+      evidence,
+      reproducibility: {
+        resultId: audit.resultId,
+        level: audit.level,
+        score: audit.score,
+        verifiedRerun: audit.verifiedRerun,
+        missing: audit.missing,
+        resultScores: audit.resultScores
+      }
+    });
   });
 
   app.post('/v1/projects/:projectId/agent', requireProject, requireIdempotentWrite, async (req, res) => {

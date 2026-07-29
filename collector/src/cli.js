@@ -202,7 +202,12 @@ async function runCommand(args) {
       expected = raw.manifest || raw;
     }
   }
-  const manifest = attachRunEvidence(before, after, runRecord, expected);
+  const manifest = attachRunEvidence(before, after, runRecord, expected, {
+    root: config.root,
+    projectKey: config.project_key,
+    command: args._[0],
+    args: args._.slice(1)
+  });
   const key = await signingKey(args, config);
   const payload = key ? signManifest(manifest, key) : manifest;
   let saved;
