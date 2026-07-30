@@ -10,12 +10,22 @@ if (JSON.stringify(expectedNames) !== JSON.stringify(actualNames)) {
   throw new Error(`Migration sequence is not contiguous: ${actualNames.join(', ')}`);
 }
 const sql = (await Promise.all(files.map((name) => readFile(path.join(directory, name), 'utf8')))).join('\n');
+const declaredFunctions = new Set(
+  [...sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-z_][a-z0-9_]*)\s*\(/gi)]
+    .map((match) => match[1].toLowerCase())
+);
 const tenantTables = new Set();
 for (const match of sql.matchAll(/CREATE TABLE\s+([a-z_][a-z0-9_]*)\s*\(([\s\S]*?)\);/gi)) {
   if (/\btenant_id\b/i.test(match[2])) tenantTables.add(match[1].toLowerCase());
 }
 tenantTables.add('project_memberships');
 const missing = [];
+for (const policy of sql.matchAll(/CREATE POLICY[\s\S]*?;/gi)) {
+  for (const call of policy[0].matchAll(/\b([a-z_][a-z0-9_]*tenant[a-z0-9_]*)\s*\(\s*\)/gi)) {
+    const functionName = call[1].toLowerCase();
+    if (!declaredFunctions.has(functionName)) missing.push(`policy function not declared: ${functionName}`);
+  }
+}
 for (const table of [...tenantTables].sort()) {
   if (!new RegExp(`ALTER TABLE\\s+${table}\\s+ENABLE ROW LEVEL SECURITY`, 'i').test(sql)) {
     missing.push(`${table}: ENABLE RLS`);
