@@ -1,4 +1,5 @@
-FROM node:22-bookworm-slim AS build
+ARG NODE_IMAGE=node:22.22.0-bookworm-slim
+FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY backend/package.json backend/package.json
@@ -10,11 +11,14 @@ COPY frontend frontend
 COPY collector collector
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-bookworm-slim AS runtime
+FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 RUN groupadd --system --gid 10001 lablineage \
-    && useradd --system --uid 10001 --gid lablineage --home-dir /app lablineage
+    && useradd --system --uid 10001 --gid lablineage --home-dir /app lablineage \
+    && rm -rf /usr/local/lib/node_modules \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+      /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/pnpm /usr/local/bin/pnpx
 COPY --from=build --chown=lablineage:lablineage /app /app
 USER lablineage
 EXPOSE 8788
