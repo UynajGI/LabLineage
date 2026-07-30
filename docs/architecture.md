@@ -2,41 +2,71 @@
 
 ```text
 React/Vite console
-       │  /v1 JSON
+       │ /v1 JSON
        ▼
-Express API ── JsonStore (.lablineage/state.json)
-   │   │
-   │   ├── local scanner → SHA-256 snapshots → deterministic diff
-   │   ├── manifest importer → nodes + evidence edges
-   │   ├── audit engine → R0–R4 score + non-destructive findings
-   │   └── handoff exporter → Markdown + CSV + unsent EML draft
+Express API ── JsonStore (.lablineage/state.json, development only)
+   │
+   ├── local scanner → SHA-256 snapshots → deterministic diff
+   ├── manifest importer → nodes + evidence edges
+   ├── audit engine → R0–R4 score + non-destructive findings
+   ├── handoff exporter → immutable Markdown + CSV + unsent EML draft
    │
    └── Google ADK Runner
-          ├── get_project_summary
-          ├── get_lineage_graph
-          ├── list_open_findings
-          ├── get_snapshot_changes
-          └── preview_handoff
+          │ projectId + actorId + conversationId
+          ▼
+       GuardianRootAgent (RoutedAgent)
+          ├── EvidenceRetrieverAgent (SequentialAgent)
+          │      ├── ParallelEvidenceSources (ParallelAgent)
+          │      │      ├── lineage source
+          │      │      └── repository source
+          │      └── evidence synthesis
+          ├── ReproducibilityAuditorAgent (SequentialAgent)
+          │      ├── AuditEvidenceSources (ParallelAgent)
+          │      └── deterministic audit decision
+          └── HandoffPlannerAgent
+                 │
+                 ├── five schema-bounded FunctionTools
+                 └── MCPToolset → internal read-only MCP endpoint
 ```
 
-The model never computes hashes or authoritative reproducibility scores. Those
-come from deterministic services and are exposed to the agent through read-only
-tools. Tool results and model text are treated as separate layers.
+The root uses deterministic intent routing, while the specialist agents keep
+evidence retrieval, reproducibility judgment and handoff planning separate.
+Evidence sources can execute concurrently, but synthesis and audit decisions
+are sequential. `RoutedAgent` is experimental in ADK 1.4.0, so the dependency is
+pinned and its routing, agent names and allowed tools are covered by policy
+tests.
 
-Development can use an atomic JSON store so the application runs without
-Docker. Production rejects that mode by default and uses PostgreSQL 17,
-tenant-scoped transactions, forced RLS, and a normalized projection maintained
-in the same transaction as application state. Forward-only migrations are
-executed by a separate identity; the runtime has DML-only database privileges.
+The model never computes hashes or authoritative reproducibility scores. Those
+come from deterministic services and are exposed through read-only tools. Tool
+results and model text remain separate layers, and every response returns a
+structured execution trace containing routes, agent transitions, tool calls,
+tool results, bounded evidence IDs, R levels and elapsed time.
+
+## Session boundary
+
+ADK state is scoped by `projectId + actorId + conversationId`. PostgreSQL stores
+sessions and append-only ADK events in tenant-scoped tables with `ENABLE RLS`,
+`FORCE RLS` and tenant policies. A user can start a new conversation or delete a
+conversation and all of its events. The JSON implementation exists only for
+local development; production requires PostgreSQL.
+
+## Read-only MCP boundary
+
+The API hosts an internal Streamable HTTP MCP endpoint with two tools:
+`lineage_evidence` and `repository_evidence`. Each tool is annotated read-only
+and non-destructive, returns bounded fields, and never returns local paths or
+credentials. The endpoint requires a process-internal bearer token and is not a
+public `/v1` integration. ADK discovers and calls these tools through
+`MCPToolset`; an integration test exercises the real protocol boundary.
 
 ## Data safety
 
 - Absolute scan paths are never persisted; only relative path tokens are stored.
-- Secret-shaped files, Git metadata, dependencies, and build outputs are skipped.
+- Secret-shaped files, Git metadata, dependencies and build outputs are skipped.
 - `LABLINEAGE_SCAN_ROOT` constrains scanner access when configured.
 - Handoff writes require preview and explicit confirmation. Drive and Sheets
   writes are externally idempotent; Gmail creates drafts only.
-- Agent tools are read-only; evidence content is explicitly treated as
+- Agent and MCP tools are read-only; evidence content is explicitly treated as
   untrusted data to reduce prompt-injection risk.
 
 ## Durable ingestion and immutable objects
@@ -67,8 +97,11 @@ conversion as GitHub.
 
 CI pins third-party Actions to immutable commits and gates PostgreSQL RLS,
 cross-platform Collector behavior, E2E/Axe, contracts, migrations, performance,
-image vulnerabilities, SBOMs and Sigstore signatures. Terraform creates Cloud
-Run, Cloud SQL, GCS, Artifact Registry and an optional repository-restricted
-GitHub Workload Identity provider. CD updates the migration job to the exact
-commit image, executes it, deploys Cloud Run, probes readiness and restores the
-previous image on failure.
+image vulnerabilities, SBOMs and Sigstore signatures. A separate scheduled or
+manual live-Agent evaluation records model, route, structured trace, tool calls,
+token usage and latency as a retained workflow artifact.
+
+Terraform creates Cloud Run, Cloud SQL, GCS, Artifact Registry and an optional
+repository-restricted GitHub Workload Identity provider. CD updates the
+migration job to the exact commit image, executes it, deploys Cloud Run, probes
+readiness and restores the previous image on failure.

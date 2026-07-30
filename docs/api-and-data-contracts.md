@@ -54,6 +54,18 @@
 - 发布流程先备份，再由独立迁移身份执行向前迁移，运行身份只获得所需 DML 权限。
 - Schema 回滚采用“代码先兼容、数据库向前修复”的 expand/contract 策略；禁止在故障中直接删除列或回写旧迁移。破坏性 contract 迁移必须经过至少一个兼容发布周期和恢复演练。
 
+## Agent 会话与执行轨迹
+
+- `GET /v1/projects/{projectId}/agent/conversations` 列出当前认证主体在项目内的会话。
+- `POST /v1/projects/{projectId}/agent/conversations` 创建新会话；`DELETE /v1/projects/{projectId}/agent/conversations/{conversationId}` 清除会话及 ADK 事件。两个写操作都要求 `Idempotency-Key`。
+- `POST /v1/projects/{projectId}/agent` 必须提交 `message` 与 `conversationId`，且会话必须同时匹配租户、项目和认证主体。
+- Agent 响应包含 `route`、`conversationId`、`model`、`usage`、`durationMs`、`toolCalls` 和结构化 `trace`。轨迹仅包含有界工具参数、证据 ID、R 等级和耗时，不记录凭据或原始研究路径。
+- PostgreSQL 的 `agent_sessions` 与 `agent_session_events` 使用强制 RLS；迁移 010 是前向迁移，不修改已发布迁移。
+
+内部 `/mcp/projects/{projectId}` 是 ADK 进程内使用的 MCP JSON-RPC 边界，
+不属于面向客户端的 `/v1` API。它要求内部 bearer token，仅发布
+`lineage_evidence` 与 `repository_evidence` 两个只读、非破坏性工具。
+
 ## 保留与删除
 
 - 签名 Bundle、证据、审计事件和版本报告属于审计链，默认不可由普通用户物理删除。

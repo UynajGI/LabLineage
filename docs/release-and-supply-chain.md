@@ -84,3 +84,12 @@ names and identities remain environment variables, never repository secrets.
 - `pre-push` runs the complete test/build/evaluation/contract/performance and
   browser accessibility suite.
 - `post-commit` records a checksum-protected receipt under `.git/`.
+
+## Live Agent evaluation evidence
+
+`.github/workflows/live-agent-eval.yml` is independent from deployment. It runs
+on a daily schedule or manual dispatch, reads the Gemini key only from GitHub
+Actions secrets, and uploads a 30-day JSON artifact containing commit SHA,
+model, responses, structured ADK traces, tool calls, token usage and latency.
+When the key is absent it uploads an explicit `skipped` record. All action
+references remain pinned to full 40-character commit SHAs.

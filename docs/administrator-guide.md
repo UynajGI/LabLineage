@@ -25,7 +25,7 @@ npm run dev
 
 ## 数据与对象存储
 
-按顺序执行 9 个迁移。导入任务载荷与交接报告写入不可变对象；应用状态和规范化表只保留私有对象引用、SHA-256、大小和生成版本。GCS Bucket 启用 30 天保留，生命周期默认 365 天；运行身份没有删除权限。
+按顺序执行 10 个迁移。导入任务载荷与交接报告写入不可变对象；应用状态和规范化表只保留私有对象引用、SHA-256、大小和生成版本。GCS Bucket 启用 30 天保留，生命周期默认 365 天；运行身份没有删除权限。
 
 ## Git 与仓库连接器
 
@@ -53,6 +53,11 @@ node scripts/install-git-hooks.mjs
 ## CI/CD
 
 `ci.yml` 运行 PostgreSQL RLS、跨平台 Collector、浏览器 E2E/Axe、OpenAPI/迁移/幂等门禁、镜像扫描、SBOM 和 Sigstore 签名。`deploy.yml` 只在 CI 成功且 `ENABLE_STAGING_DEPLOY=true` 时自动部署 staging；production 只能手动选择受保护环境。
+
+`live-agent-eval.yml` 每日定时或手动运行真实 Gemini 轨迹评测。只在 GitHub
+Actions Secret 中配置 `GOOGLE_GENAI_API_KEY`；证据制品保留模型、提交、
+路由、响应、工具轨迹、token 与延迟。控制台会话由 PostgreSQL 按
+`projectId + actorId + conversationId` 隔离，管理员不应绕过 API 直接清表。
 
 Terraform 可创建 Artifact Registry、GitHub OIDC Workload Identity Pool 和最小权限部署身份。把 Terraform 输出映射到 GitHub environment 变量：
 

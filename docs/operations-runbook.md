@@ -137,3 +137,22 @@
    自动恢复上一个镜像。
 4. 回滚后核对迁移是否为向前兼容；数据库只能通过新的修复迁移前进，禁止回写
    或删除已应用迁移。
+
+## ADK 会话与受控在线评测
+
+- 生产必须使用 PostgreSQL 保存 `agent_sessions` 和
+  `agent_session_events`；不得以 JSON 状态作为生产会话存储。
+- 会话隔离键为 `projectId + actorId + conversationId`。清理会话应调用
+  `DELETE /v1/projects/{projectId}/agent/conversations/{conversationId}`，
+  并保留对应审计事件，不要直接删表。
+- 可选设置 `LABLINEAGE_MCP_INTERNAL_TOKEN`；未设置时进程会生成随机内部
+  token。该值不得进入浏览器、日志、报告或仓库。
+- GitHub 仓库 Secret `GOOGLE_GENAI_API_KEY` 仅供
+  `Live Agent Evaluation` 工作流使用。工作流每天 02:00（Asia/Shanghai）
+  以及手动触发时运行，并上传 `live-agent-eval-evidence`，保留 30 天。
+- 证据 JSON 必须包含提交 SHA、模型、每个用例的隔离 conversationId、
+  route、response、结构化 trace、toolCalls、token usage 和 latency。未配置
+  Secret 时工作流明确产出 `skipped` 证据，不得伪称在线评测通过。
+- 手动执行：GitHub Actions → **Live Agent Evaluation** → **Run workflow**。
+  评测失败时先下载证据，检查路由、工具轨迹、超时和 token 使用；不要把
+  响应全文复制到公开 issue，除非已完成科研数据审查。

@@ -20,6 +20,27 @@ The machine-readable OpenAPI 3.1 contract is available at [http://127.0.0.1:8788
 
 The scanner, graph, audit and local handoff preview work without a model key. Agent chat requires `GOOGLE_GENAI_API_KEY` or `GEMINI_API_KEY`. For a Vertex AI Express Mode `AQ.` key, keep `LABLINEAGE_VERTEX_EXPRESS=TRUE`; `LABLINEAGE_PROXY=http://127.0.0.1:17891` routes model traffic through the requested local proxy.
 
+## Google ADK architecture
+
+Guardian is a layered ADK 1.4.0 system rather than a single prompt wrapper:
+
+- `GuardianRootAgent` routes to `EvidenceRetrieverAgent`,
+  `ReproducibilityAuditorAgent` or `HandoffPlannerAgent`.
+- Evidence and audit sources run with `ParallelAgent`; synthesis and audit
+  decisions run with `SequentialAgent`.
+- ADK sessions and events persist across restarts under the
+  `projectId + actorId + conversationId` boundary.
+- `MCPToolset` calls an authenticated internal Streamable HTTP MCP server that
+  exposes only bounded, read-only lineage and repository evidence.
+- The console shows route, agent transitions, tool calls/results, evidence IDs,
+  R levels and elapsed time.
+- The `Live Agent Evaluation` workflow runs daily or manually and retains model,
+  response, structured trace, token usage and latency evidence.
+
+See [architecture](docs/architecture.md) and
+[operations runbook](docs/operations-runbook.md) for the trust boundaries and
+controlled live-evaluation procedure.
+
 ## Edge Collector
 
 For the production project workflow and security guidance, see [Edge Collector 安装与安全操作指南](docs/collector-guide.md).
