@@ -14,9 +14,12 @@ RUN npm run build && npm prune --omit=dev
 FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
-RUN groupadd --system --gid 10001 lablineage \
+RUN apt-get update \
+    && apt-get install --only-upgrade --yes --no-install-recommends libgnutls30 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 lablineage \
     && useradd --system --uid 10001 --gid lablineage --home-dir /app lablineage \
-    && rm -rf /usr/local/lib/node_modules \
+    && rm -rf /usr/local/lib/node_modules /opt/yarn-v1.22.22 \
     && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
       /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/pnpm /usr/local/bin/pnpx
 COPY --from=build --chown=lablineage:lablineage /app /app
