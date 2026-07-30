@@ -1,0 +1,70 @@
+name: Live Agent Evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Gemini model used for the controlled live evaluation
+        required: false
+        default: gemini-2.5-flash
+        type: string
+  schedule:
+    - cron: '0 18 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-agent-eval-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LABLINEAGE_MODEL: ${{ inputs.model || 'gemini-2.5-flash' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.0
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Check controlled evaluation credential
+        id: credential
+        shell: bash
+        env:
+          GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
+        run: |
+          mkdir -p artifacts
+          if [[ -n "${GOOGLE_GENAI_API_KEY}" ]]; then
+            echo "configured=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "configured=false" >> "${GITHUB_OUTPUT}"
+            node -e "require('fs').writeFileSync('artifacts/live-agent-eval.json', JSON.stringify({schemaVersion:'lablineage.agent-eval.v1',mode:'live',generatedAt:new Date().toISOString(),commitSha:process.env.GITHUB_SHA,status:'skipped',reason:'GOOGLE_GENAI_API_KEY secret is not configured'}, null, 2)+'\n')"
+          fi
+
+      - name: Run live trajectory and response evaluation
+        if: steps.credential.outputs.configured == 'true'
+        env:
+          GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
+        run: npm run eval:agent:live --workspace backend -- --output="${GITHUB_WORKSPACE}/artifacts/live-agent-eval.json"
+
+      - name: Publish evaluation summary
+        if: always()
+        shell: bash
+        run: |
+          node -e "const r=require('./artifacts/live-agent-eval.json'); const rows=[\`## Live Agent Evaluation\`,\`- Status: \${r.status || (r.passed ? 'passed' : 'failed')}\`,\`- Model: \${r.model || process.env.LABLINEAGE_MODEL}\`,\`- Commit: \${r.commitSha || process.env.GITHUB_SHA}\`,\`- Cases: \${r.results?.length || 0}\`]; require('fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, rows.join('\n')+'\n')"
+
+      - name: Upload immutable evaluation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-agent-eval-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/live-agent-eval.json
+          if-no-files-found: error
+          retention-days: 30
