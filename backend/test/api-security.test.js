@@ -58,6 +58,55 @@ test('security headers, RBAC and project isolation are enforced over HTTP', asyn
       assert.equal(snapshots.status, 200);
       assert.equal(Array.isArray(await snapshots.json()), true);
 
+      const mcpDenied = await fetch(`${baseUrl}/mcp/projects/${visibleProjects[0].id}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+      });
+      assert.equal(mcpDenied.status, 401);
+
+      const conversationKey = `conversation-${Date.now()}`;
+      const createdConversation = await fetch(
+        `${baseUrl}/v1/projects/${visibleProjects[0].id}/agent/conversations`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-lablineage-role': 'editor',
+            'x-lablineage-user': 'agent-user-a',
+            'idempotency-key': conversationKey
+          },
+          body: JSON.stringify({ title: 'Persistent evidence review' })
+        }
+      );
+      assert.equal(createdConversation.status, 201);
+      const conversation = await createdConversation.json();
+      assert.match(conversation.id, /^conv_/);
+
+      const ownedConversations = await fetch(
+        `${baseUrl}/v1/projects/${visibleProjects[0].id}/agent/conversations`,
+        { headers: { 'x-lablineage-role': 'viewer', 'x-lablineage-user': 'agent-user-a' } }
+      );
+      assert.equal((await ownedConversations.json()).conversations.length, 1);
+      const isolatedConversations = await fetch(
+        `${baseUrl}/v1/projects/${visibleProjects[0].id}/agent/conversations`,
+        { headers: { 'x-lablineage-role': 'viewer', 'x-lablineage-user': 'agent-user-b' } }
+      );
+      assert.equal((await isolatedConversations.json()).conversations.length, 0);
+
+      const clearedConversation = await fetch(
+        `${baseUrl}/v1/projects/${visibleProjects[0].id}/agent/conversations/${conversation.id}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'x-lablineage-role': 'editor',
+            'x-lablineage-user': 'agent-user-a',
+            'idempotency-key': `clear-${conversation.id}`
+          }
+        }
+      );
+      assert.equal(clearedConversation.status, 204);
+
       const deniedSetup = await fetch(`${baseUrl}/v1/setup`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json', 'x-lablineage-role': 'viewer' },

@@ -8,8 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { ZodError, z } from 'zod';
 import { createAudit } from './lib/audit.js';
 import { runGuardianAgent } from './lib/agent.js';
+import { GuardianSessionService } from './lib/agent-session-service.js';
 import { authenticateRequest, authMode, authorizeProject, authorizeRole, serviceActorSummaries } from './lib/auth.js';
 import { postgresConfigured } from './lib/database.js';
+import {
+  getMcpInternalToken,
+  handleReadOnlyMcpRequest,
+  requireInternalMcpToken
+} from './lib/mcp-server.js';
 import { recordAgentUsage, renderPrometheusMetrics, requestObservability, structuredLog } from './lib/observability.js';
 import { createObjectStore } from './lib/object-store.js';
 import { importManifest } from './lib/manifest.js';
@@ -79,6 +85,13 @@ function requireProject(req, res, next) {
     return res.status(404).json({ error: 'Project not found' });
   }
   authorizeProject(req.method === 'GET' ? 'viewer' : 'editor')(req, res, next);
+}
+
+function requireReadableProject(req, res, next) {
+  if (!store.get().projects.some((project) => project.id === req.params.projectId)) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+  authorizeProject('viewer')(req, res, next);
 }
 
 async function ingestManifest(raw, actor, { sourceId = null } = {}) {
@@ -466,6 +479,14 @@ export function buildApp() {
     }
   );
   app.use(express.json({ limit: process.env.API_PAYLOAD_MAX_SIZE || '5mb' }));
+  app.post(
+    '/mcp/projects/:projectId',
+    rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true, legacyHeaders: false }),
+    requireInternalMcpToken,
+    async (req, res) => {
+      await handleReadOnlyMcpRequest(store, req, res);
+    }
+  );
   app.use('/v1', authenticateRequest());
   app.use('/v1', async (_req, _res, next) => {
     try {
@@ -1311,11 +1332,72 @@ export function buildApp() {
     res.json({ root, nodes, edges, evidence, reproducibility: { level: audit.level, score: audit.score, verifiedRerun: audit.verifiedRerun, missing: audit.missing } });
   });
 
-  app.post('/v1/projects/:projectId/agent', requireProject, requireIdempotentWrite, async (req, res) => {
-    const input = z.object({ message: z.string().min(1).max(8_000) }).parse(req.body);
-    const result = await runGuardianAgent(store, { projectId: req.params.projectId, message: input.message, userId: req.actor.subject });
+  app.get('/v1/projects/:projectId/agent/conversations', requireReadableProject, async (req, res) => {
+    const sessionService = new GuardianSessionService(store, req.params.projectId);
+    res.json({ conversations: await sessionService.listConversations(req.actor.subject) });
+  });
+
+  app.post(
+    '/v1/projects/:projectId/agent/conversations',
+    requireReadableProject,
+    requireIdempotentWrite,
+    async (req, res) => {
+      const input = z.object({ title: z.string().min(1).max(200).optional() }).parse(req.body);
+      const sessionService = new GuardianSessionService(store, req.params.projectId);
+      const conversation = await sessionService.createConversation(req.actor.subject, input.title);
+      await store.log({
+        action: 'agent_conversation_create',
+        actor: req.actor.subject,
+        resource: `project/${req.params.projectId}`,
+        details: `Created ADK conversation ${conversation.id}`
+      });
+      res.status(201).json(conversation);
+    }
+  );
+
+  app.delete(
+    '/v1/projects/:projectId/agent/conversations/:conversationId',
+    requireReadableProject,
+    requireIdempotentWrite,
+    async (req, res) => {
+      const conversationId = z.string().min(8).max(100).parse(req.params.conversationId);
+      const sessionService = new GuardianSessionService(store, req.params.projectId);
+      await sessionService.deleteSession({
+        appName: sessionService.appName,
+        userId: req.actor.subject,
+        sessionId: conversationId
+      });
+      await store.log({
+        action: 'agent_conversation_clear',
+        actor: req.actor.subject,
+        resource: `project/${req.params.projectId}`,
+        details: `Cleared ADK conversation ${conversationId}`
+      });
+      res.status(204).end();
+    }
+  );
+
+  app.post('/v1/projects/:projectId/agent', requireReadableProject, requireIdempotentWrite, async (req, res) => {
+    const input = z.object({
+      message: z.string().min(1).max(8_000),
+      conversationId: z.string().min(8).max(100)
+    }).parse(req.body);
+    const mcpUrl = `http://127.0.0.1:${req.socket.localPort}/mcp/projects/${encodeURIComponent(req.params.projectId)}`;
+    const result = await runGuardianAgent(store, {
+      projectId: req.params.projectId,
+      message: input.message,
+      userId: req.actor.subject,
+      conversationId: input.conversationId,
+      mcpUrl,
+      mcpToken: getMcpInternalToken()
+    });
     recordAgentUsage(result.model, result.usage);
-    await store.log({ action: 'agent_invoke', actor: req.actor.subject, resource: `project/${req.params.projectId}`, details: `ADK tools: ${result.toolCalls.join(', ') || 'none'}` });
+    await store.log({
+      action: 'agent_invoke',
+      actor: req.actor.subject,
+      resource: `project/${req.params.projectId}`,
+      details: `ADK route=${result.route}; conversation=${result.conversationId}; tools=${result.toolCalls.join(', ') || 'none'}; duration_ms=${result.durationMs}`
+    });
     res.json(result);
   });
 

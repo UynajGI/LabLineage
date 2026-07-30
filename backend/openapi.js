@@ -41,6 +41,9 @@ const routeDefinitions = [
   ['post', '/v1/projects/{projectId}/github/sync', 'Synchronize read-only GitHub evidence'],
   ['post', '/v1/projects/{projectId}/repositories/sync', 'Synchronize GitHub or allowlisted local Git evidence'],
   ['get', '/v1/artifacts/{artifactId}/lineage', 'Read bounded artifact lineage'],
+  ['get', '/v1/projects/{projectId}/agent/conversations', 'List the actor-owned ADK conversations'],
+  ['post', '/v1/projects/{projectId}/agent/conversations', 'Create a persistent ADK conversation'],
+  ['delete', '/v1/projects/{projectId}/agent/conversations/{conversationId}', 'Clear one actor-owned ADK conversation'],
   ['post', '/v1/projects/{projectId}/agent', 'Invoke the read-only Guardian ADK agent'],
   ['post', '/v1/handoffs/{handoffId}/report', 'Generate a versioned immutable handoff report'],
   ['get', '/v1/handoffs/{handoffId}/reports/{reportId}', 'Read a generated handoff report'],
@@ -55,6 +58,8 @@ const responseStatus = new Map([
   ['post /v1/manifests', '202'],
   ['post /v1/manifests/batch', '207'],
   ['post /v1/projects/{projectId}/nodes/{nodeId}/confirm', '204'],
+  ['delete /v1/projects/{projectId}/agent/conversations/{conversationId}', '204'],
+  ['post /v1/projects/{projectId}/agent', '200'],
   ['put /v1/setup', '204']
 ]);
 
@@ -97,6 +102,22 @@ const requestSchemaByRoute = {
       properties: { includeTextDiff: { const: true } }
     },
     then: { required: ['confirmation'] }
+  },
+  'post /v1/projects/{projectId}/agent/conversations': {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      title: { type: 'string', minLength: 1, maxLength: 200 }
+    }
+  },
+  'post /v1/projects/{projectId}/agent': {
+    type: 'object',
+    additionalProperties: false,
+    required: ['message', 'conversationId'],
+    properties: {
+      message: { type: 'string', minLength: 1, maxLength: 8000 },
+      conversationId: { type: 'string', minLength: 8, maxLength: 100 }
+    }
   },
   'post /v1/handoffs/{handoffId}/report': { $ref: '#/components/schemas/HandoffReportRequest' }
 };

@@ -12,9 +12,10 @@ test('registry and gateway enforce read-only Agent tools and guarded writes', as
   const gateway = parse(await readFile(path.join(deployDir, 'gateway-policy.yaml'), 'utf8'));
   const result = validateDeploymentPolicy(registry, gateway);
   assert.equal(result.denyByDefault, true);
-  assert.equal(result.tools, 5);
+  assert.equal(result.agents, 4);
+  assert.equal(result.tools, 7);
 
   const unsafe = structuredClone(registry);
-  unsafe.agents[0].tools[0].mode = 'write';
+  unsafe.agents[1].tools[0].mode = 'write';
   assert.throws(() => validateDeploymentPolicy(unsafe, gateway));
 });

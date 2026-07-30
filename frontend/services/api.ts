@@ -1,4 +1,6 @@
 import type {
+  AgentConversation,
+  AgentResponse,
   AuditEvent,
   FileChange,
   Finding,
@@ -242,10 +244,31 @@ export const api = {
     return request('/v1/manifests', { method: 'POST', body: JSON.stringify(manifest) });
   },
 
-  async sendAgentMessage(message: string): Promise<{ response: string; toolCalls: string[]; model: string; usage?: { inputTokens: number; outputTokens: number; totalTokens: number } }> {
+  async listAgentConversations(): Promise<AgentConversation[]> {
+    const result = await request<{ conversations: AgentConversation[] }>(
+      `/v1/projects/${await projectId()}/agent/conversations`
+    );
+    return result.conversations;
+  },
+
+  async createAgentConversation(title?: string): Promise<AgentConversation> {
+    return request(`/v1/projects/${await projectId()}/agent/conversations`, {
+      method: 'POST',
+      body: JSON.stringify(title ? { title } : {})
+    });
+  },
+
+  async clearAgentConversation(conversationId: string): Promise<void> {
+    await request(
+      `/v1/projects/${await projectId()}/agent/conversations/${encodeURIComponent(conversationId)}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  async sendAgentMessage(message: string, conversationId: string): Promise<AgentResponse> {
     return request(`/v1/projects/${await projectId()}/agent`, {
       method: 'POST',
-      body: JSON.stringify({ message })
+      body: JSON.stringify({ message, conversationId })
     });
   },
 

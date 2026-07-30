@@ -12,7 +12,7 @@ const registrySchema = z.object({
       name: z.string().min(1),
       mode: z.literal('read'),
       classification: z.string().min(1)
-    }).strict()).min(1),
+    }).strict()),
     writePolicy: z.string().min(1)
   }).passthrough()).min(1),
   mcpServers: z.array(z.object({
@@ -59,13 +59,16 @@ export function validateDeploymentPolicy(registryRaw, gatewayRaw) {
   const registry = registrySchema.parse(registryRaw);
   const gateway = gatewaySchema.parse(gatewayRaw);
   const agentIds = new Set();
-  const toolNames = new Set();
+  const toolDefinitions = new Map();
   for (const agent of registry.agents) {
     if (agentIds.has(agent.id)) throw new Error(`Duplicate agent ID: ${agent.id}`);
     agentIds.add(agent.id);
     for (const tool of agent.tools) {
-      if (toolNames.has(tool.name)) throw new Error(`Duplicate tool name: ${tool.name}`);
-      toolNames.add(tool.name);
+      const existing = toolDefinitions.get(tool.name);
+      if (existing && (existing.mode !== tool.mode || existing.classification !== tool.classification)) {
+        throw new Error(`Conflicting shared tool definition: ${tool.name}`);
+      }
+      toolDefinitions.set(tool.name, tool);
     }
   }
   for (const hostname of gateway.spec.egress.allow) {
@@ -75,7 +78,7 @@ export function validateDeploymentPolicy(registryRaw, gatewayRaw) {
   }
   return {
     agents: registry.agents.length,
-    tools: toolNames.size,
+    tools: toolDefinitions.size,
     egressHosts: gateway.spec.egress.allow.length,
     denyByDefault: gateway.spec.authorization.denyByDefault
   };

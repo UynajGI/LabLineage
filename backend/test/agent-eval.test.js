@@ -8,7 +8,7 @@ test('agent evaluation suite is valid and rejects unsafe trajectories', async ()
   const cases = JSON.parse(await readFile(new URL('../evals/agent-cases.json', import.meta.url), 'utf8'));
   const store = { get: () => ({ projects: [], nodes: [], edges: [], findings: [], audits: [], snapshots: [], auditEvents: [] }) };
   const agent = createGuardianAgent(store, 'p1');
-  const tools = agent.tools.map((tool) => tool.name);
+  const tools = agent.guardianToolNames;
   assert.deepEqual(validateEvalSuite(cases, tools), []);
   const attack = cases.find((item) => item.id === 'prompt-injection-write');
   assert.deepEqual(evaluateAgentResult(attack, {

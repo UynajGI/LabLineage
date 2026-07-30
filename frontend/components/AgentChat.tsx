@@ -1,6 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Bot, Loader2, Send, ShieldCheck, User, Wrench } from 'lucide-react';
+import {
+  AlertCircle,
+  Bot,
+  Database,
+  GitBranch,
+  Loader2,
+  Plus,
+  RotateCcw,
+  Send,
+  ShieldCheck,
+  User,
+  Wrench
+} from 'lucide-react';
 import { api } from '../services/api';
+import type { AgentConversation, AgentTraceItem } from '../types';
 
 interface Message {
   id: string;
@@ -8,6 +21,7 @@ interface Message {
   content: string;
   isError?: boolean;
   toolCalls?: string[];
+  trace?: AgentTraceItem[];
 }
 
 function renderText(text: string) {
@@ -27,7 +41,35 @@ export const AgentChat: React.FC = () => {
   }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [conversations, setConversations] = useState<AgentConversation[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        let available = await api.listAgentConversations();
+        if (!available.length) available = [await api.createAgentConversation()];
+        if (!cancelled) {
+          setConversations(available);
+          setConversationId(available[0].id);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMessages((current) => [...current, {
+            id: crypto.randomUUID(),
+            role: 'system',
+            content: error instanceof Error ? error.message : 'Unable to initialize persistent Agent session.',
+            isError: true
+          }]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -35,18 +77,24 @@ export const AgentChat: React.FC = () => {
 
   async function send() {
     const message = input.trim();
-    if (!message || loading) return;
+    if (!message || loading || !conversationId) return;
     setInput('');
     setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'user', content: message }]);
     setLoading(true);
     try {
-      const result = await api.sendAgentMessage(message);
+      const result = await api.sendAgentMessage(message, conversationId);
       setMessages((current) => [...current, {
         id: crypto.randomUUID(),
         role: 'agent',
         content: result.response,
-        toolCalls: result.toolCalls
+        toolCalls: result.toolCalls,
+        trace: result.trace
       }]);
+      setConversations((current) => current.map((conversation) =>
+        conversation.id === conversationId
+          ? { ...conversation, title: conversation.title === 'New conversation' ? message.slice(0, 120) : conversation.title, updatedAt: new Date().toISOString() }
+          : conversation
+      ));
     } catch (error) {
       setMessages((current) => [...current, {
         id: crypto.randomUUID(),
@@ -59,9 +107,61 @@ export const AgentChat: React.FC = () => {
     }
   }
 
+  async function newConversation() {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const conversation = await api.createAgentConversation();
+      setConversations((current) => [conversation, ...current]);
+      setConversationId(conversation.id);
+      setMessages([{
+        id: crypto.randomUUID(),
+        role: 'agent',
+        content: '已创建新的持久会话。此会话按项目、当前身份和 conversationId 隔离。'
+      }]);
+    } catch (error) {
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: 'system',
+        content: error instanceof Error ? error.message : '创建 Agent 会话失败。',
+        isError: true
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function clearConversation() {
+    if (!conversationId || loading) return;
+    setLoading(true);
+    try {
+      await api.clearAgentConversation(conversationId);
+      const replacement = await api.createAgentConversation();
+      setConversations((current) => [
+        replacement,
+        ...current.filter((conversation) => conversation.id !== conversationId)
+      ]);
+      setConversationId(replacement.id);
+      setMessages([{
+        id: crypto.randomUUID(),
+        role: 'system',
+        content: '旧会话上下文及其 ADK 事件已清除，现已创建空白会话。'
+      }]);
+    } catch (error) {
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: 'system',
+        content: error instanceof Error ? error.message : '清除 Agent 会话失败。',
+        isError: true
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <div className="flex h-[calc(100vh-8rem)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
         <div className="flex items-center gap-3">
           <div className="rounded-lg bg-blue-600 p-2 text-white"><Bot size={21} /></div>
           <div>
@@ -69,8 +169,34 @@ export const AgentChat: React.FC = () => {
             <p className="text-xs text-slate-500">@google/adk · 后端保管密钥 · 只读证据工具</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
-          <ShieldCheck size={14} /> Evidence-first
+        <div className="flex items-center gap-2">
+          <select
+            value={conversationId || ''}
+            onChange={(event) => {
+              setConversationId(event.target.value);
+              setMessages([{
+                id: crypto.randomUUID(),
+                role: 'system',
+                content: '已切换持久会话；后端 ADK 将继续使用该会话的历史上下文。'
+              }]);
+            }}
+            disabled={!conversationId || loading}
+            aria-label="选择 Agent 会话"
+            className="max-w-56 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700"
+          >
+            {conversations.map((conversation) => (
+              <option key={conversation.id} value={conversation.id}>{conversation.title}</option>
+            ))}
+          </select>
+          <button type="button" onClick={() => void newConversation()} disabled={loading} className="rounded-md border border-slate-300 p-1.5 text-slate-600 hover:bg-slate-50" aria-label="新建会话">
+            <Plus size={15} />
+          </button>
+          <button type="button" onClick={() => void clearConversation()} disabled={!conversationId || loading} className="rounded-md border border-slate-300 p-1.5 text-slate-600 hover:bg-slate-50" aria-label="清除当前会话上下文">
+            <RotateCcw size={15} />
+          </button>
+          <div className="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+            <ShieldCheck size={14} /> Evidence-first
+          </div>
         </div>
       </header>
 
@@ -91,6 +217,41 @@ export const AgentChat: React.FC = () => {
                       <Wrench size={11} /> {tool}
                     </span>
                   ))}
+                </div>
+              )}
+              {message.trace && message.trace.length > 0 && (
+                <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3 text-left">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    <GitBranch size={13} /> Agent execution trace
+                  </div>
+                  <ol className="space-y-2 border-l border-slate-200 pl-3">
+                    {message.trace.map((item) => (
+                      <li key={`${item.sequence}-${item.type}-${item.agent}-${item.tool}`} className="text-xs text-slate-600">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-mono text-slate-400">{item.sequence}</span>
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-700">{item.type}</span>
+                          {item.agent && <span>{item.agent}</span>}
+                          {item.target && <span>→ {item.target}</span>}
+                          {item.tool && <span className="inline-flex items-center gap-1 text-blue-700"><Wrench size={11} />{item.tool}</span>}
+                          <span className="text-slate-400">{item.elapsedMs} ms</span>
+                        </div>
+                        {item.reproducibility && item.reproducibility.length > 0 && (
+                          <div className="mt-1 flex gap-1">
+                            {item.reproducibility.map((level) => <span key={level} className="rounded bg-violet-50 px-1.5 py-0.5 text-violet-700">{level}</span>)}
+                          </div>
+                        )}
+                        {item.evidenceIds && item.evidenceIds.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {item.evidenceIds.map((evidenceId) => (
+                              <span key={evidenceId} className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-amber-800">
+                                <Database size={10} />{evidenceId}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
                 </div>
               )}
               <div className={`rounded-2xl px-4 py-3 text-left text-sm leading-6 ${
@@ -132,7 +293,7 @@ export const AgentChat: React.FC = () => {
           <button
             type="button"
             onClick={() => void send()}
-            disabled={loading || !input.trim()}
+            disabled={loading || !input.trim() || !conversationId}
             className="self-end rounded-lg bg-blue-600 p-3 text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="发送"
           >

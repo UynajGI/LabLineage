@@ -1,8 +1,20 @@
-import { FunctionTool, Gemini, LlmAgent, Runner, InMemorySessionService, isFinalResponse } from '@google/adk';
+import {
+  FunctionTool,
+  Gemini,
+  LlmAgent,
+  MCPToolset,
+  ParallelAgent,
+  RoutedAgent,
+  Runner,
+  SequentialAgent,
+  isFinalResponse,
+  toStructuredEvents
+} from '@google/adk';
 import { GoogleGenAI } from '@google/genai';
 import { randomUUID } from 'node:crypto';
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { z } from 'zod';
+import { GuardianSessionService } from './agent-session-service.js';
 import { diffSnapshots } from './scanner.js';
 import { projectSummary } from './store.js';
 
@@ -66,7 +78,7 @@ function projectData(state, projectId) {
   return { nodes, edges };
 }
 
-export function createGuardianAgent(store, projectId) {
+function createGuardianTools(store, projectId) {
   const summaryTool = new FunctionTool({
     name: 'get_project_summary',
     description: 'Return the deterministic project summary and latest reproducibility audit. Read-only.',
@@ -140,52 +152,286 @@ export function createGuardianAgent(store, projectId) {
     }
   });
 
-  return new LlmAgent({
-    name: 'lablineage_guardian',
-    description: 'Evidence-first research lineage and handoff guardian.',
-    model: configuredModel(),
-    instruction: SYSTEM_INSTRUCTION,
-    tools: [summaryTool, lineageTool, findingsTool, changesTool, handoffTool],
-    generateContentConfig: { temperature: 0.2 }
-  });
+  return { summaryTool, lineageTool, findingsTool, changesTool, handoffTool };
 }
 
-export async function runGuardianAgent(store, { projectId, message, userId = 'local-user' }) {
+const TOOL_NAMES = [
+  'get_project_summary',
+  'get_lineage_graph',
+  'list_open_findings',
+  'get_snapshot_changes',
+  'preview_handoff',
+  'mcp_lineage_evidence',
+  'mcp_repository_evidence'
+];
+
+function evidenceInstruction(focus) {
+  return `${SYSTEM_INSTRUCTION}
+
+你的角色是 ${focus}。只收集和归纳证据，不替用户执行写操作。回答必须列出所使用的 evidence_id，
+证据不足时标记 unknown。优先调用可用工具，不得根据记忆编造项目事实。`;
+}
+
+function mcpToolset(mcpUrl, mcpToken, toolsets) {
+  if (!mcpUrl || !mcpToken) return null;
+  const toolset = new MCPToolset(
+    {
+      type: 'StreamableHTTPConnectionParams',
+      url: mcpUrl,
+      timeout: 10_000,
+      sseReadTimeout: 10_000,
+      terminateOnClose: true,
+      transportOptions: {
+        requestInit: {
+          headers: { 'x-lablineage-mcp-token': mcpToken }
+        }
+      }
+    },
+    ['mcp_lineage_evidence', 'mcp_repository_evidence'],
+    'mcp'
+  );
+  toolsets.push(toolset);
+  return toolset;
+}
+
+export function routeGuardianMessage(message) {
+  if (/(handoff|交接|移交|接收人|交付|gmail|drive|邮件草稿)/i.test(message)) return 'handoff';
+  if (/(audit|审计|复现|reproduc|finding|风险|冲突|缺失|完整性|R[0-4])/i.test(message)) return 'audit';
+  return 'evidence';
+}
+
+function messageFromContext(context) {
+  return (context.userContent?.parts || []).map((part) => part.text || '').join('\n');
+}
+
+export function createGuardianAgent(store, projectId, { mcpUrl, mcpToken } = {}) {
+  const model = configuredModel();
+  const { summaryTool, lineageTool, findingsTool, changesTool, handoffTool } =
+    createGuardianTools(store, projectId);
+  const mcpToolsets = [];
+
+  const lineageMcp = mcpToolset(mcpUrl, mcpToken, mcpToolsets);
+  const repositoryMcp = mcpToolset(mcpUrl, mcpToken, mcpToolsets);
+  const lineageSourceAgent = new LlmAgent({
+    name: 'LineageEvidenceSourceAgent',
+    description: 'Retrieves bounded lineage and evidence neighborhoods.',
+    model,
+    instruction: evidenceInstruction('谱系证据检索器'),
+    tools: [lineageTool, ...(lineageMcp ? [lineageMcp] : [])],
+    outputKey: 'evidence_lineage',
+    generateContentConfig: { temperature: 0.1 }
+  });
+  const repositorySourceAgent = new LlmAgent({
+    name: 'RepositoryEvidenceSourceAgent',
+    description: 'Retrieves repository, snapshot and project provenance in parallel.',
+    model,
+    instruction: evidenceInstruction('仓库与快照证据检索器'),
+    tools: [summaryTool, changesTool, ...(repositoryMcp ? [repositoryMcp] : [])],
+    outputKey: 'evidence_repository',
+    generateContentConfig: { temperature: 0.1 }
+  });
+  const parallelEvidenceSources = new ParallelAgent({
+    name: 'ParallelEvidenceSources',
+    description: 'Fetches independent lineage and repository evidence concurrently.',
+    subAgents: [lineageSourceAgent, repositorySourceAgent]
+  });
+  const evidenceSynthesisAgent = new LlmAgent({
+    name: 'EvidenceSynthesisAgent',
+    description: 'Combines parallel evidence without changing its confidence.',
+    model,
+    instruction: `${SYSTEM_INSTRUCTION}
+
+并行证据结果：
+- 谱系证据：{evidence_lineage}
+- 仓库与快照证据：{evidence_repository}
+
+合并两路结果，消除重复，但保留冲突、缺失、置信度和所有 evidence_id。`,
+    outputKey: 'evidence_answer',
+    generateContentConfig: { temperature: 0.1 }
+  });
+  const evidenceRetrieverAgent = new SequentialAgent({
+    name: 'EvidenceRetrieverAgent',
+    description: 'Retrieves multiple evidence sources in parallel and synthesizes them.',
+    subAgents: [parallelEvidenceSources, evidenceSynthesisAgent]
+  });
+
+  const auditSummaryAgent = new LlmAgent({
+    name: 'AuditSummarySourceAgent',
+    description: 'Retrieves deterministic project and reproducibility summaries.',
+    model,
+    instruction: evidenceInstruction('复现性摘要采集器'),
+    tools: [summaryTool, changesTool],
+    outputKey: 'audit_summary',
+    generateContentConfig: { temperature: 0.1 }
+  });
+  const auditFindingAgent = new LlmAgent({
+    name: 'AuditFindingSourceAgent',
+    description: 'Retrieves open findings and their evidence in parallel.',
+    model,
+    instruction: evidenceInstruction('开放风险采集器'),
+    tools: [findingsTool, lineageTool],
+    outputKey: 'audit_findings',
+    generateContentConfig: { temperature: 0.1 }
+  });
+  const auditEvidenceSources = new ParallelAgent({
+    name: 'AuditEvidenceSources',
+    description: 'Collects deterministic audit inputs concurrently before reasoning.',
+    subAgents: [auditSummaryAgent, auditFindingAgent]
+  });
+  const auditDecisionAgent = new LlmAgent({
+    name: 'AuditDecisionAgent',
+    description: 'Applies the evidence-first reproducibility policy after collection.',
+    model,
+    instruction: `${SYSTEM_INSTRUCTION}
+
+你是复现性审计决策阶段，只能在证据采集完成后作答。
+- 项目与运行摘要：{audit_summary}
+- 开放风险：{audit_findings}
+
+按“等级、确定事实、推断、冲突、缺失项、人工动作、evidence_id”顺序输出。
+R4 只能由成功受控重跑且输出哈希匹配证明。`,
+    outputKey: 'audit_answer',
+    generateContentConfig: { temperature: 0.1 }
+  });
+  const reproducibilityAuditorAgent = new SequentialAgent({
+    name: 'ReproducibilityAuditorAgent',
+    description: 'Runs evidence collection before reproducibility judgment.',
+    subAgents: [auditEvidenceSources, auditDecisionAgent]
+  });
+
+  const handoffPlannerAgent = new LlmAgent({
+    name: 'HandoffPlannerAgent',
+    description: 'Builds a read-only, evidence-linked handoff plan.',
+    model,
+    instruction: `${SYSTEM_INSTRUCTION}
+
+你是交接规划器。必须先调用 preview_handoff；只输出预览和人工确认步骤，不得声称已经发送、
+上传、删除或修改权限。交接项必须关联 evidence_id 或明确标记 missing evidence。`,
+    tools: [handoffTool, summaryTool, findingsTool],
+    outputKey: 'handoff_answer',
+    generateContentConfig: { temperature: 0.1 }
+  });
+
+  const rootAgent = new RoutedAgent({
+    name: 'GuardianRootAgent',
+    description: 'Routes evidence, audit and handoff work to bounded specialist agents.',
+    agents: {
+      evidence: evidenceRetrieverAgent,
+      audit: reproducibilityAuditorAgent,
+      handoff: handoffPlannerAgent
+    },
+    router: (_agents, context) => routeGuardianMessage(messageFromContext(context))
+  });
+  rootAgent.guardianToolNames = TOOL_NAMES;
+  rootAgent.mcpToolsets = mcpToolsets;
+  return rootAgent;
+}
+
+function evidenceIdsFrom(value) {
+  const serialized = JSON.stringify(value || {});
+  return [...new Set(serialized.match(/\bev_[A-Za-z0-9_.:-]+\b/g) || [])].slice(0, 100);
+}
+
+function reproducibilityFrom(value) {
+  return [...new Set(JSON.stringify(value || {}).match(/\bR[0-4]\b/g) || [])];
+}
+
+function addTrace(trace, item) {
+  const previous = trace.at(-1);
+  if (previous && JSON.stringify(previous) === JSON.stringify(item)) return;
+  trace.push({ sequence: trace.length + 1, ...item });
+}
+
+export async function runGuardianAgent(store, {
+  projectId,
+  message,
+  userId = 'local-user',
+  conversationId = `conv_${randomUUID()}`,
+  mcpUrl,
+  mcpToken
+}) {
   if (!process.env.GOOGLE_GENAI_API_KEY && !process.env.GEMINI_API_KEY) {
     throw Object.assign(new Error('GOOGLE_GENAI_API_KEY is not configured on the backend'), { statusCode: 503 });
   }
-  const agent = createGuardianAgent(store, projectId);
-  const sessionService = new InMemorySessionService();
+  const agent = createGuardianAgent(store, projectId, { mcpUrl, mcpToken });
+  const sessionService = new GuardianSessionService(store, projectId);
   const runner = new Runner({
-    appName: 'lablineage_guardian',
+    appName: sessionService.appName,
     agent,
     sessionService
   });
-  const sessionId = `session_${randomUUID()}`;
-  await sessionService.createSession({
-    appName: 'lablineage_guardian',
+  const session = await sessionService.getOrCreateSession({
+    appName: sessionService.appName,
     userId,
-    sessionId
+    sessionId: conversationId,
+    state: { projectId, actorId: userId, conversationId, title: message.slice(0, 120) }
   });
+  if (session.state.title === 'New conversation') session.state.title = message.slice(0, 120);
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), Number(process.env.LABLINEAGE_AGENT_TIMEOUT_MS || 45_000));
   const textParts = [];
   const toolCalls = [];
+  const trace = [];
   const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  const startedAt = Date.now();
+  const selectedRoute = routeGuardianMessage(message);
+  addTrace(trace, {
+    type: 'route',
+    agent: 'GuardianRootAgent',
+    target: {
+      evidence: 'EvidenceRetrieverAgent',
+      audit: 'ReproducibilityAuditorAgent',
+      handoff: 'HandoffPlannerAgent'
+    }[selectedRoute],
+    elapsedMs: 0
+  });
   try {
     for await (const event of runner.runAsync({
       userId,
-      sessionId,
+      sessionId: conversationId,
       newMessage: { role: 'user', parts: [{ text: message }] },
       abortSignal: abortController.signal
     })) {
       if (event.usageMetadata) {
-        usage.inputTokens = Math.max(usage.inputTokens, Number(event.usageMetadata.promptTokenCount || 0));
-        usage.outputTokens = Math.max(usage.outputTokens, Number(event.usageMetadata.candidatesTokenCount || 0));
-        usage.totalTokens = Math.max(usage.totalTokens, Number(event.usageMetadata.totalTokenCount || 0));
+        usage.inputTokens += Number(event.usageMetadata.promptTokenCount || 0);
+        usage.outputTokens += Number(event.usageMetadata.candidatesTokenCount || 0);
+        usage.totalTokens += Number(event.usageMetadata.totalTokenCount || 0);
+      }
+      if (event.author && event.author !== 'user') {
+        addTrace(trace, {
+          type: 'agent',
+          agent: event.author,
+          elapsedMs: Date.now() - startedAt
+        });
+      }
+      for (const structured of toStructuredEvents(event)) {
+        if (structured.type === 'tool_call') {
+          toolCalls.push(structured.call.name);
+          addTrace(trace, {
+            type: 'tool_call',
+            agent: event.author,
+            tool: structured.call.name,
+            elapsedMs: Date.now() - startedAt
+          });
+        } else if (structured.type === 'tool_result') {
+          addTrace(trace, {
+            type: 'tool_result',
+            agent: event.author,
+            tool: structured.result.name,
+            evidenceIds: evidenceIdsFrom(structured.result),
+            reproducibility: reproducibilityFrom(structured.result),
+            elapsedMs: Date.now() - startedAt
+          });
+        } else if (structured.type === 'error') {
+          addTrace(trace, {
+            type: 'error',
+            agent: event.author,
+            message: structured.error.message,
+            elapsedMs: Date.now() - startedAt
+          });
+        }
       }
       for (const part of event.content?.parts || []) {
-        if (part.functionCall) toolCalls.push(part.functionCall.name);
         if (part.text && (isFinalResponse(event) || event.author === agent.name)) textParts.push(part.text);
       }
     }
@@ -199,11 +445,24 @@ export async function runGuardianAgent(store, { projectId, message, userId = 'lo
     throw error;
   } finally {
     clearTimeout(timeout);
+    await Promise.allSettled((agent.mcpToolsets || []).map((toolset) => toolset.close()));
   }
+  const response = textParts.at(-1) || textParts.join('\n') || 'Agent returned no textual response.';
+  addTrace(trace, {
+    type: 'final',
+    agent: trace.filter((item) => item.type === 'agent').at(-1)?.agent || agent.name,
+    evidenceIds: evidenceIdsFrom(response),
+    reproducibility: reproducibilityFrom(response),
+    elapsedMs: Date.now() - startedAt
+  });
   return {
-    response: textParts.at(-1) || textParts.join('\n') || 'Agent returned no textual response.',
+    response,
+    conversationId,
+    route: selectedRoute,
     toolCalls: [...new Set(toolCalls)],
+    trace,
     model: process.env.LABLINEAGE_MODEL || 'gemini-2.5-flash',
-    usage
+    usage,
+    durationMs: Date.now() - startedAt
   };
 }

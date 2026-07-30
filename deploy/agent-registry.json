@@ -2,26 +2,73 @@
   "schemaVersion": "lablineage.agent-registry.v1",
   "agents": [
     {
-      "id": "lablineage-guardian",
-      "displayName": "LabLineage Guardian",
+      "id": "guardian-root",
+      "displayName": "Guardian Root Router",
       "version": "0.3.0",
-      "runtime": "google-adk-node",
-      "model": "${LABLINEAGE_MODEL}",
+      "runtime": "google-adk-node-routed-agent",
+      "model": "deterministic-router",
       "endpoint": "${GUARDIAN_BASE_URL}/v1/projects/{projectId}/agent",
+      "authentication": "oidc",
+      "dataClassification": "research-metadata",
+      "routes": ["EvidenceRetrieverAgent", "ReproducibilityAuditorAgent", "HandoffPlannerAgent"],
+      "tools": [],
+      "writePolicy": "Routes only to registered read-only specialist agents.",
+      "owner": "LabLineage platform team"
+    },
+    {
+      "id": "evidence-retriever",
+      "displayName": "EvidenceRetrieverAgent",
+      "version": "0.3.0",
+      "runtime": "google-adk-node-sequential-parallel",
+      "model": "${LABLINEAGE_MODEL}",
       "authentication": "oidc",
       "dataClassification": "research-metadata",
       "tools": [
         { "name": "get_project_summary", "mode": "read", "classification": "internal" },
         { "name": "get_lineage_graph", "mode": "read", "classification": "research-metadata" },
-        { "name": "get_findings", "mode": "read", "classification": "research-metadata" },
         { "name": "get_snapshot_changes", "mode": "read", "classification": "research-metadata" },
-        { "name": "get_audit_events", "mode": "read", "classification": "security-audit" }
+        { "name": "mcp_lineage_evidence", "mode": "read", "classification": "research-metadata" },
+        { "name": "mcp_repository_evidence", "mode": "read", "classification": "source-metadata" }
       ],
-      "writePolicy": "No direct write tools. Workspace writes use a separate preview and confirmation API.",
+      "writePolicy": "No direct write tools.",
+      "owner": "LabLineage platform team"
+    },
+    {
+      "id": "reproducibility-auditor",
+      "displayName": "ReproducibilityAuditorAgent",
+      "version": "0.3.0",
+      "runtime": "google-adk-node-sequential-parallel",
+      "model": "${LABLINEAGE_MODEL}",
+      "authentication": "oidc",
+      "dataClassification": "research-metadata",
+      "tools": [
+        { "name": "get_project_summary", "mode": "read", "classification": "internal" },
+        { "name": "get_lineage_graph", "mode": "read", "classification": "research-metadata" },
+        { "name": "get_snapshot_changes", "mode": "read", "classification": "research-metadata" },
+        { "name": "list_open_findings", "mode": "read", "classification": "research-metadata" }
+      ],
+      "writePolicy": "No direct write tools; R4 requires verified controlled rerun evidence.",
+      "owner": "LabLineage platform team"
+    },
+    {
+      "id": "handoff-planner",
+      "displayName": "HandoffPlannerAgent",
+      "version": "0.3.0",
+      "runtime": "google-adk-node",
+      "model": "${LABLINEAGE_MODEL}",
+      "authentication": "oidc",
+      "dataClassification": "handoff-report",
+      "tools": [
+        { "name": "get_project_summary", "mode": "read", "classification": "internal" },
+        { "name": "list_open_findings", "mode": "read", "classification": "research-metadata" },
+        { "name": "preview_handoff", "mode": "read", "classification": "handoff-report" }
+      ],
+      "writePolicy": "Preview only. Workspace writes use a separate confirmation and idempotency API.",
       "owner": "LabLineage platform team"
     }
   ],
   "mcpServers": [
+    { "id": "lablineage-readonly-evidence", "authentication": "internal-process-token", "mode": "read-only", "classification": "research-metadata" },
     { "id": "edge-collector", "authentication": "hashed-service-token", "mode": "manifest-write", "classification": "research-metadata" },
     { "id": "github", "authentication": "github-token-or-app", "mode": "read-only", "classification": "source-metadata" },
     { "id": "google-workspace", "authentication": "oauth2", "mode": "confirmed-write", "classification": "handoff-report" }

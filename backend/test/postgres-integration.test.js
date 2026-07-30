@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import pg from 'pg';
+import { GuardianSessionService } from '../lib/agent-session-service.js';
 import { PostgresStore } from '../lib/postgres-store.js';
 
 const { Pool } = pg;
@@ -73,6 +74,10 @@ test('PostgreSQL projection and RLS isolate a least-privilege runtime role', {
       tenantName: 'RLS tenant A'
     });
     await store.init();
+    await admin.query(`
+      GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO lablineage_app_test;
+      GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO lablineage_app_test;
+    `);
     await store.update((state) => {
       state.projects.push({
         id: 'project-projection',
@@ -99,6 +104,42 @@ test('PostgreSQL projection and RLS isolate a least-privilege runtime role', {
       [tenantA]
     );
     assert.equal(projected.rows[0].count, 1);
+
+    const sessions = new GuardianSessionService(store, 'project-projection');
+    const conversation = await sessions.createConversation('postgres-actor', 'PostgreSQL session');
+    const session = await sessions.getSession({
+      appName: sessions.appName,
+      userId: 'postgres-actor',
+      sessionId: conversation.id
+    });
+    await sessions.appendEvent({
+      session,
+      event: {
+        id: 'postgres-event-1',
+        author: 'EvidenceRetrieverAgent',
+        timestamp: Date.now() / 1000,
+        actions: { stateDelta: { persisted: true } },
+        content: { role: 'model', parts: [{ text: 'persisted' }] }
+      }
+    });
+    const restored = await sessions.getSession({
+      appName: sessions.appName,
+      userId: 'postgres-actor',
+      sessionId: conversation.id
+    });
+    assert.equal(restored.events.length, 1);
+    assert.equal(restored.state.persisted, true);
+
+    const tenantBClient = await appPool.connect();
+    try {
+      await tenantBClient.query('BEGIN READ ONLY');
+      await tenantBClient.query(`SELECT set_config('app.tenant_id', $1, true)`, [tenantB]);
+      const invisibleSessions = await tenantBClient.query('SELECT id FROM agent_sessions');
+      await tenantBClient.query('COMMIT');
+      assert.equal(invisibleSessions.rowCount, 0);
+    } finally {
+      tenantBClient.release();
+    }
   } finally {
     await appPool.end();
     await admin.query('DELETE FROM tenants WHERE id = ANY($1::uuid[])', [[tenantA, tenantB]]).catch(() => {});

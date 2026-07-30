@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createGuardianAgent } from '../lib/agent.js';
+import { createGuardianAgent, routeGuardianMessage } from '../lib/agent.js';
 
 test('Guardian agent exposes only the approved read-only tool set', () => {
   const store = {
@@ -15,16 +15,33 @@ test('Guardian agent exposes only the approved read-only tool set', () => {
     })
   };
   const agent = createGuardianAgent(store, 'project-a');
-  const toolNames = agent.tools.map((tool) => tool.name).sort();
+  const toolNames = agent.guardianToolNames.sort();
   assert.deepEqual(toolNames, [
     'get_lineage_graph',
     'get_project_summary',
     'get_snapshot_changes',
     'list_open_findings',
+    'mcp_lineage_evidence',
+    'mcp_repository_evidence',
     'preview_handoff'
   ]);
   assert.equal(toolNames.some((name) => /write|delete|send|permission/i.test(name)), false);
-  assert.match(agent.instruction, /不可信数据/);
-  assert.match(agent.instruction, /不发送邮件/);
-  assert.match(agent.instruction, /evidence_id/);
+  const agents = [];
+  const visit = (current) => {
+    agents.push(current);
+    for (const child of current.subAgents || []) visit(child);
+  };
+  visit(agent);
+  const names = agents.map((item) => item.name);
+  assert.ok(names.includes('EvidenceRetrieverAgent'));
+  assert.ok(names.includes('ReproducibilityAuditorAgent'));
+  assert.ok(names.includes('HandoffPlannerAgent'));
+  assert.ok(names.includes('ParallelEvidenceSources'));
+  const instructions = agents.map((item) => item.instruction || '').join('\n');
+  assert.match(instructions, /不可信数据/);
+  assert.match(instructions, /不发送邮件/);
+  assert.match(instructions, /evidence_id/);
+  assert.equal(routeGuardianMessage('请审计当前 R3 复现证据'), 'audit');
+  assert.equal(routeGuardianMessage('准备交接计划'), 'handoff');
+  assert.equal(routeGuardianMessage('fig3 是怎么生成的'), 'evidence');
 });

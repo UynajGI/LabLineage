@@ -2,6 +2,37 @@ export type ReproducibilityLevel = 'R0' | 'R1' | 'R2' | 'R3' | 'R4';
 export type FindingSeverity = 'P0' | 'P1' | 'P2' | 'P3';
 export type NodeType = 'Project' | 'CodeVersion' | 'Dataset' | 'ParameterSet' | 'Environment' | 'Run' | 'Figure' | 'Conclusion';
 
+export interface AgentConversation {
+  id: string;
+  projectId: string;
+  actorId: string;
+  title: string;
+  updatedAt: string;
+}
+
+export interface AgentTraceItem {
+  sequence: number;
+  type: 'route' | 'agent' | 'tool_call' | 'tool_result' | 'error' | 'final';
+  agent?: string;
+  target?: string;
+  tool?: string;
+  message?: string;
+  evidenceIds?: string[];
+  reproducibility?: ReproducibilityLevel[];
+  elapsedMs: number;
+}
+
+export interface AgentResponse {
+  response: string;
+  conversationId: string;
+  route: 'evidence' | 'audit' | 'handoff';
+  toolCalls: string[];
+  trace: AgentTraceItem[];
+  model: string;
+  usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+  durationMs: number;
+}
+
 export interface LineageNode {
   id: string;
   type: NodeType;
