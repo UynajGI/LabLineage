@@ -11,6 +11,7 @@ instructions.
 | [User guide](user-guide.md) | Researchers and reviewers | Daily lineage, audit, Guardian, snapshot, and handoff workflows |
 | [Administrator guide](administrator-guide.md) | Operators and platform owners | Configuration, identity, storage, hooks, CI/CD, and launch checks |
 | [Demo script](demo-script.md) | Presenters and judges | A short, repeatable product walkthrough |
+| [Agent evaluation](agent-evaluation.md) | Maintainers, evaluators, and user researchers | Automated Agent metrics, lifecycle controls, and the human usability protocol |
 
 ## Understand and integrate
 

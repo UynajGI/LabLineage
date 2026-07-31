@@ -115,6 +115,10 @@ E2E and accessibility checks. See
 [verification status](docs/verification-status.md) for what automation proves
 and which assurances still require a real external environment.
 
+Agent-specific quality gates, cost metrics, lifecycle budgets, and the human
+usability study are defined in the
+[Guardian Agent evaluation protocol](docs/agent-evaluation.md).
+
 ## Documentation
 
 The maintained documentation set is organized by audience and task in

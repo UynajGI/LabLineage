@@ -21,9 +21,11 @@ concurrency:
 jobs:
   evaluate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       LABLINEAGE_MODEL: ${{ inputs.model || 'gemini-2.5-flash' }}
+      LABLINEAGE_AGENT_TIMEOUT_MS: 75000
+      LABLINEAGE_EVIDENCE_LOOP_MAX_ITERATIONS: 2
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -45,7 +47,7 @@ jobs:
             echo "configured=true" >> "${GITHUB_OUTPUT}"
           else
             echo "configured=false" >> "${GITHUB_OUTPUT}"
-            node -e "require('fs').writeFileSync('artifacts/live-agent-eval.json', JSON.stringify({schemaVersion:'lablineage.agent-eval.v1',mode:'live',generatedAt:new Date().toISOString(),commitSha:process.env.GITHUB_SHA,status:'skipped',reason:'GOOGLE_GENAI_API_KEY secret is not configured'}, null, 2)+'\n')"
+            node -e "require('fs').writeFileSync('artifacts/live-agent-eval.json', JSON.stringify({schemaVersion:'lablineage.agent-eval.v2',mode:'live',generatedAt:new Date().toISOString(),commitSha:process.env.GITHUB_SHA,status:'skipped',reason:'GOOGLE_GENAI_API_KEY secret is not configured'}, null, 2)+'\n')"
           fi
 
       - name: Run live trajectory and response evaluation
@@ -58,7 +60,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          node -e "const r=require('./artifacts/live-agent-eval.json'); const rows=[\`## Live Agent Evaluation\`,\`- Status: \${r.status || (r.passed ? 'passed' : 'failed')}\`,\`- Model: \${r.model || process.env.LABLINEAGE_MODEL}\`,\`- Commit: \${r.commitSha || process.env.GITHUB_SHA}\`,\`- Cases: \${r.results?.length || 0}\`]; require('fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, rows.join('\n')+'\n')"
+          node -e "const r=require('./artifacts/live-agent-eval.json'); const m=r.metrics||{}; const pct=v=>v==null?'n/a':(v*100).toFixed(1)+'%'; const rows=[\`## Live Agent Evaluation\`,\`- Status: \${r.status || (r.passed ? 'passed' : 'failed')}\`,\`- Model: \${r.model || process.env.LABLINEAGE_MODEL}\`,\`- Commit: \${r.commitSha || process.env.GITHUB_SHA}\`,\`- Cases: \${r.results?.length || 0}\`,\`- Route accuracy: \${pct(m.routeAccuracy)}\`,\`- Tool selection accuracy: \${pct(m.toolSelectionAccuracy)}\`,\`- Evidence citation rate: \${pct(m.evidenceCitationRate)}\`,\`- Sensitive leakage rate: \${pct(m.sensitiveInformationLeakageRate)}\`,\`- P95 latency: \${m.latencyMs?.p95 ?? 'n/a'} ms\`,\`- Estimated cost: $\${m.cost?.estimatedTotal ?? 'n/a'}\`]; require('fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, rows.join('\n')+'\n')"
 
       - name: Upload immutable evaluation evidence
         if: always()

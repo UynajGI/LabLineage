@@ -96,12 +96,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p artifacts
+          echo "DEPLOY_EVIDENCE_STATUS=started" >> "${GITHUB_ENV}"
           previous_image="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
             --region "${GCP_REGION}" \
             --project "${GCP_PROJECT_ID}" \
             --format='value(spec.template.spec.containers[0].image)')"
           rollback() {
             echo "::warning::Readiness failed; restoring ${previous_image}"
+            echo "DEPLOY_EVIDENCE_STATUS=rolled_back" >> "${GITHUB_ENV}"
+            echo "DEPLOY_PREVIOUS_IMAGE=${previous_image}" >> "${GITHUB_ENV}"
             gcloud run services update "${CLOUD_RUN_SERVICE}" \
               --image "${previous_image}" \
               --region "${GCP_REGION}" \
@@ -123,6 +127,14 @@ jobs:
             if curl --fail --silent --show-error \
               --header "Authorization: Bearer ${identity_token}" \
               "${service_url}/api/ready"; then
+              revision="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+                --region "${GCP_REGION}" \
+                --project "${GCP_PROJECT_ID}" \
+                --format='value(status.latestReadyRevisionName)')"
+              echo "DEPLOY_EVIDENCE_STATUS=passed" >> "${GITHUB_ENV}"
+              echo "DEPLOY_REVISION=${revision}" >> "${GITHUB_ENV}"
+              echo "DEPLOY_SERVICE_URL=${service_url}" >> "${GITHUB_ENV}"
+              echo "DEPLOY_PREVIOUS_IMAGE=${previous_image}" >> "${GITHUB_ENV}"
               trap - ERR
               exit 0
             fi
@@ -130,3 +142,21 @@ jobs:
           done
           echo "::error::Cloud Run readiness did not succeed within 100 seconds"
           exit 1
+
+      - name: Record Cloud Run deployment evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          node -e "const fs=require('fs'),crypto=require('crypto'); const hash=v=>v?crypto.createHash('sha256').update(v).digest('hex'):null; const evidence={schemaVersion:'lablineage.deployment-evidence.v1',generatedAt:new Date().toISOString(),status:process.env.DEPLOY_EVIDENCE_STATUS||'failed_before_readiness',commitSha:process.env.DEPLOY_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:Number(process.env.GITHUB_RUN_ATTEMPT),environment:process.env.DEPLOY_ENVIRONMENT,image:process.env.DEPLOY_IMAGE||null,previousImage:process.env.DEPLOY_PREVIOUS_IMAGE||null,revision:process.env.DEPLOY_REVISION||null,serviceUrlSha256:hash(process.env.DEPLOY_SERVICE_URL),readinessEndpoint:'/api/ready',identity:'github-oidc',rollbackConfigured:true}; fs.writeFileSync('artifacts/cloud-run-deployment.json',JSON.stringify(evidence,null,2)+'\n')"
+        env:
+          DEPLOY_ENVIRONMENT: ${{ github.event.inputs.environment || 'staging' }}
+
+      - name: Upload immutable Cloud Run deployment evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cloud-run-deployment-${{ env.DEPLOY_SHA }}-${{ github.run_attempt }}
+          path: artifacts/cloud-run-deployment.json
+          if-no-files-found: error
+          retention-days: 90
