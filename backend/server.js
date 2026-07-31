@@ -1396,7 +1396,7 @@ export function buildApp() {
       action: 'agent_invoke',
       actor: req.actor.subject,
       resource: `project/${req.params.projectId}`,
-      details: `ADK route=${result.route}; conversation=${result.conversationId}; tools=${result.toolCalls.join(', ') || 'none'}; duration_ms=${result.durationMs}`
+      details: `ADK trace=${result.traceId}; route=${result.route}; conversation=${result.conversationId}; tools=${result.toolCalls.join(', ') || 'none'}; model_calls=${result.lifecycle.modelCalls}; duration_ms=${result.durationMs}`
     });
     res.json(result);
   });

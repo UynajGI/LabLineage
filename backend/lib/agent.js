@@ -1,7 +1,9 @@
 import {
+  EXIT_LOOP,
   FunctionTool,
   Gemini,
   LlmAgent,
+  LoopAgent,
   MCPToolset,
   ParallelAgent,
   RoutedAgent,
@@ -14,6 +16,7 @@ import { GoogleGenAI } from '@google/genai';
 import { randomUUID } from 'node:crypto';
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { z } from 'zod';
+import { GuardianLifecyclePlugin } from './agent-lifecycle-plugin.js';
 import { GuardianSessionService } from './agent-session-service.js';
 import { diffSnapshots } from './scanner.js';
 import { projectSummary } from './store.js';
@@ -235,6 +238,31 @@ export function createGuardianAgent(store, projectId, { mcpUrl, mcpToken } = {})
     description: 'Fetches independent lineage and repository evidence concurrently.',
     subAgents: [lineageSourceAgent, repositorySourceAgent]
   });
+  const evidenceCompletionAgent = new LlmAgent({
+    name: 'EvidenceCompletionAgent',
+    description: 'Fills concrete evidence gaps and exits when evidence is sufficient or explicitly unavailable.',
+    model,
+    instruction: `${SYSTEM_INSTRUCTION}
+
+已采集证据：
+- 谱系证据：{evidence_lineage}
+- 仓库与快照证据：{evidence_repository}
+
+只补充回答用户问题所必需的证据。每轮遵守以下确定退出规则：
+1. 如果已有 evidence_id 足以回答且不存在可由只读工具解决的关键缺口，立即调用 exit_loop。
+2. 如果关键缺口无法由现有只读工具解决，将它明确标为 missing evidence，然后调用 exit_loop。
+3. 只有发现一个具体、可由工具解决的缺口时才调用一次最相关工具；不得重复相同查询。
+禁止执行写操作，禁止把推断升级为事实。`,
+    tools: [summaryTool, lineageTool, findingsTool, changesTool, EXIT_LOOP],
+    outputKey: 'evidence_completion',
+    generateContentConfig: { temperature: 0.1 }
+  });
+  const evidenceCompletionLoop = new LoopAgent({
+    name: 'EvidenceCompletionLoop',
+    description: 'Performs bounded evidence completion with explicit sufficient-or-unavailable exit conditions.',
+    subAgents: [evidenceCompletionAgent],
+    maxIterations: Math.min(3, Math.max(2, Number(process.env.LABLINEAGE_EVIDENCE_LOOP_MAX_ITERATIONS || 2)))
+  });
   const evidenceSynthesisAgent = new LlmAgent({
     name: 'EvidenceSynthesisAgent',
     description: 'Combines parallel evidence without changing its confidence.',
@@ -244,6 +272,7 @@ export function createGuardianAgent(store, projectId, { mcpUrl, mcpToken } = {})
 并行证据结果：
 - 谱系证据：{evidence_lineage}
 - 仓库与快照证据：{evidence_repository}
+- 补全结果：{evidence_completion}
 
 合并两路结果，消除重复，但保留冲突、缺失、置信度和所有 evidence_id。`,
     outputKey: 'evidence_answer',
@@ -252,7 +281,7 @@ export function createGuardianAgent(store, projectId, { mcpUrl, mcpToken } = {})
   const evidenceRetrieverAgent = new SequentialAgent({
     name: 'EvidenceRetrieverAgent',
     description: 'Retrieves multiple evidence sources in parallel and synthesizes them.',
-    subAgents: [parallelEvidenceSources, evidenceSynthesisAgent]
+    subAgents: [parallelEvidenceSources, evidenceCompletionLoop, evidenceSynthesisAgent]
   });
 
   const auditSummaryAgent = new LlmAgent({
@@ -355,10 +384,17 @@ export async function runGuardianAgent(store, {
   }
   const agent = createGuardianAgent(store, projectId, { mcpUrl, mcpToken });
   const sessionService = new GuardianSessionService(store, projectId);
+  const traceId = `agent_trace_${randomUUID()}`;
+  const lifecyclePlugin = new GuardianLifecyclePlugin({
+    traceId,
+    maxModelCalls: Number(process.env.LABLINEAGE_AGENT_MAX_MODEL_CALLS || 8),
+    maxEstimatedInputTokens: Number(process.env.LABLINEAGE_AGENT_MAX_ESTIMATED_INPUT_TOKENS || 150_000)
+  });
   const runner = new Runner({
     appName: sessionService.appName,
     agent,
-    sessionService
+    sessionService,
+    plugins: [lifecyclePlugin]
   });
   const session = await sessionService.getOrCreateSession({
     appName: sessionService.appName,
@@ -390,7 +426,9 @@ export async function runGuardianAgent(store, {
       userId,
       sessionId: conversationId,
       newMessage: { role: 'user', parts: [{ text: message }] },
-      abortSignal: abortController.signal
+      abortSignal: abortController.signal,
+      runConfig: { maxLlmCalls: Number(process.env.LABLINEAGE_AGENT_MAX_MODEL_CALLS || 8) },
+      customMetadata: { traceId }
     })) {
       if (event.usageMetadata) {
         usage.inputTokens += Number(event.usageMetadata.promptTokenCount || 0);
@@ -439,6 +477,9 @@ export async function runGuardianAgent(store, {
       throw Object.assign(new Error('Google ADK request timed out'), { statusCode: 504 });
     }
   } catch (error) {
+    const category = lifecyclePlugin.recordRuntimeError(error);
+    error.traceId = traceId;
+    error.agentErrorCategory = error.agentErrorCategory || category;
     if (abortController.signal.aborted) {
       throw Object.assign(new Error('Google ADK request timed out'), { statusCode: 504 });
     }
@@ -455,14 +496,19 @@ export async function runGuardianAgent(store, {
     reproducibility: reproducibilityFrom(response),
     elapsedMs: Date.now() - startedAt
   });
+  for (const event of lifecyclePlugin.snapshot()) {
+    addTrace(trace, { ...event, type: 'lifecycle', lifecycle: event.type });
+  }
   return {
     response,
+    traceId,
     conversationId,
     route: selectedRoute,
     toolCalls: [...new Set(toolCalls)],
-    trace,
+    trace: trace.map((item) => ({ traceId, ...item })),
     model: process.env.LABLINEAGE_MODEL || 'gemini-2.5-flash',
     usage,
-    durationMs: Date.now() - startedAt
+    durationMs: Date.now() - startedAt,
+    lifecycle: lifecyclePlugin.summary()
   };
 }

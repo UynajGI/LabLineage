@@ -37,10 +37,17 @@ test('Guardian agent exposes only the approved read-only tool set', () => {
   assert.ok(names.includes('ReproducibilityAuditorAgent'));
   assert.ok(names.includes('HandoffPlannerAgent'));
   assert.ok(names.includes('ParallelEvidenceSources'));
+  assert.ok(names.includes('EvidenceCompletionLoop'));
+  assert.ok(names.includes('EvidenceCompletionAgent'));
+  const completionLoop = agents.find((item) => item.name === 'EvidenceCompletionLoop');
+  assert.equal(completionLoop.maxIterations, 2);
+  const completionAgent = agents.find((item) => item.name === 'EvidenceCompletionAgent');
+  assert.ok(completionAgent.tools.some((tool) => tool.name === 'exit_loop'));
   const instructions = agents.map((item) => item.instruction || '').join('\n');
   assert.match(instructions, /不可信数据/);
   assert.match(instructions, /不发送邮件/);
   assert.match(instructions, /evidence_id/);
+  assert.match(instructions, /确定退出规则/);
   assert.equal(routeGuardianMessage('请审计当前 R3 复现证据'), 'audit');
   assert.equal(routeGuardianMessage('准备交接计划'), 'handoff');
   assert.equal(routeGuardianMessage('fig3 是怎么生成的'), 'evidence');

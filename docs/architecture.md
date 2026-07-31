@@ -36,11 +36,19 @@ are sequential. `RoutedAgent` is experimental in ADK 1.4.0, so the dependency is
 pinned and its routing, agent names and allowed tools are covered by policy
 tests.
 
+Evidence retrieval includes a bounded `EvidenceCompletionLoop`. Its ADK
+`LoopAgent` executes at most three iterations and calls `exit_loop` as soon as
+the available evidence is sufficient or the remaining gap cannot be resolved
+by a read-only tool. A global `GuardianLifecyclePlugin` applies model-call and
+estimated-token budgets, redacts tool arguments, classifies errors, and joins
+model/tool lifecycle events to the response `traceId`.
+
 The model never computes hashes or authoritative reproducibility scores. Those
 come from deterministic services and are exposed through read-only tools. Tool
 results and model text remain separate layers, and every response returns a
 structured execution trace containing routes, agent transitions, tool calls,
-tool results, bounded evidence IDs, R levels and elapsed time.
+tool results, lifecycle events, bounded evidence IDs, R levels, token usage and
+elapsed time.
 
 ## Session boundary
 
