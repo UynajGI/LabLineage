@@ -29,7 +29,7 @@ npm run collector -- scan --project phase-transition --root /srv/lab/projects/ph
 - JSON/YAML/TOML/INI 参数中的数值和布尔值可进入 ParameterSet；秘密键和字符串值在本地脱敏。
 - 可使用 `--io-delay-ms <毫秒>` 降低共享存储的 I/O 压力。
 
-策略文件必须使用 `schema_version: lablineage.policy.v1`。`scan.exclude` 支持目录级模式；启用符号链接、导出原始路径或原始内容会被拒绝。示例见设计文档第 18 节。
+策略文件必须使用 `schema_version: lablineage.policy.v1`。`scan.exclude` 支持目录级模式；启用符号链接、导出原始路径或原始内容会被拒绝。示例见归档设计文档（`archive/LabLineage_Guardian_设计文档_v0.1.md`，第 18 节）。
 
 ## 快照、运行与离线交接
 
