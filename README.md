@@ -10,6 +10,17 @@ It never treats an inferred file move as confirmed, and it awards R4
 reproducibility only after a successful controlled rerun with matching output
 hashes.
 
+## Competition topic mapping
+
+This project is submitted to the Firebird Hackathon under Google's
+**Gemini Enterprise for Higher Education** topic. The mapping from each topic
+requirement to an implemented capability — including declared trade-offs and
+the live evaluation baseline — is maintained in the
+[topic fit document](docs/topic-fit.md).
+
+One-line pitch: **the model explains and interacts; deterministic services own
+facts, hashes, evidence, and R0–R4 reproducibility levels.**
+
 ## Quick start
 
 Requirements: Node.js 22.15 or newer.

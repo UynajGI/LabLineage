@@ -15,6 +15,7 @@
     "provision": "node --env-file-if-exists=.env.local scripts/provision-tenant.js",
     "eval:agent": "node scripts/eval-agent.js",
     "eval:agent:live": "node --env-file-if-exists=.env.local scripts/eval-agent.js --live",
+    "benchmark:messy": "node scripts/benchmark-messy.mjs",
     "validate:deployment": "node scripts/validate-deployment.js",
     "validate:openapi": "node scripts/validate-openapi.js",
     "validate:migrations": "node scripts/validate-migrations.js",

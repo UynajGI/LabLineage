@@ -2,7 +2,7 @@
 
 1. Run `npm install --ignore-scripts`, `npm run seed`, then `npm run dev`.
 2. Open <http://localhost:5173> and show the seeded Phase Transition project.
-3. Open **Lineage Graph**, select `fig3.png`, and show the recorded run, code,
+3. Open **Lineage Explorer**, select `fig3.png`, and show the recorded run, code,
    dataset, parameters, environment, and evidence identifiers.
 4. Open **Guardian Agent** and ask:
    `fig3.png 是怎么生成的？当前能否复现？请区分事实、推断和缺失项，并列出 evidence_id。`
@@ -14,7 +14,7 @@
 7. Show the retained `lablineage.agent-eval.v2` artifact for the same commit:
    route accuracy, tool-selection accuracy, evidence citation rate, sensitive
    leakage rate, P95 latency, tokens, and estimated cost.
-8. Open **Snapshot Diff**, scan an allowed demo directory, change one file,
+8. Open **Directory Diff**, scan an allowed demo directory, change one file,
    scan again, and show that a move candidate is not presented as a fact.
 9. Trigger a reproducibility audit and show the R0–R4 breakdown. Emphasize that
    R4 requires a successful controlled rerun with matching output hashes.
