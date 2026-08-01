@@ -13,12 +13,12 @@
                     │  Cloud Run（1 个实例，公开访问）
                     ├── /v1 JSON API（Express，端口由 Cloud Run 注入的 PORT 决定）
                     ├── 前端静态资源（backend 直接 serve frontend/dist + SPA 回退）
-                    ├── JSON store（首次启动自动生成 Phase Transition 演示数据）
+                    ├── JSON store（首次启动自动生成 「相变研究」演示数据）
                     └── /app/demo-scan（镜像内置演示扫描目录，Directory Diff 用）
 ```
 
 - **前端不用单独托管**：`backend/server.js` 无条件 serve `frontend/dist`（已确认），一个服务全包。
-- **演示数据自动就位**：`JsonStore.init()` 在无 `state.json` 时自动写入 `makeDemoState()`（Phase Transition · 9 节点 6 边）——容器第一次启动即有数据，无需手工 seed。
+- **演示数据自动就位**：`JsonStore.init()` 在无 `state.json` 时自动写入 `makeDemoState()`（相变研究 · 9 节点 6 边）——容器第一次启动即有数据，无需手工 seed。
 - **免登录**：`LABLINEAGE_AUTH_MODE=development` 显式启用开发鉴权（固定本地 actor）。
 - **JSON store 硬约束**：`store-factory.js` 在 `NODE_ENV=production` 下强制要求 `DATABASE_URL`（JSON store 仅限非生产）。演示实例显式 `NODE_ENV=development` + `LABLINEAGE_HOST=0.0.0.0`（否则监听 127.0.0.1，Cloud Run 探活失败）。
 - **可写数据目录**：镜像内 `/app` 原归 root（`WORKDIR /app` 所致），运行时用户写不进——Dockerfile 已加 `RUN chown lablineage:lablineage /app`；演示实例仍用 `LABLINEAGE_DATA_DIR=/tmp/lablineage`（临时盘，实例重建自动重置，与单实例演示一致）。
@@ -113,7 +113,7 @@ curl -s $URL/api/health                  # 期望 {"status":"ok","authMode":"dev
 curl -s $URL/api/ready                   # 期望 {"status":"ready","database":"json-development"}
 ```
 
-浏览器打开 `$URL`：应看到 Dashboard，含 **Phase Transition Study**、R0–R4 分布、Handoff 就绪度。再按 `docs/demo-script.md` 走 Guardian Agent 提问。
+浏览器打开 `$URL`：应看到 Dashboard，含 **相变研究（Phase Transition Study）**、R0–R4 分布、Handoff 就绪度。再按 `docs/demo-script.md` 走 Guardian Agent 提问。
 
 ---
 

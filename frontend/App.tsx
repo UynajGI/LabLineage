@@ -1,7 +1,7 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { LayoutDashboard, Network, AlertTriangle, MessageSquare, ShieldCheck, SendToBack, History, UploadCloud, Settings, ShieldAlert, ListChecks } from 'lucide-react';
 import { api } from './services/api';
-import { useI18n } from './i18n';
+import { useI18n, translateKind, translateRole } from './i18n';
 import {
   beginLogin,
   completeLoginIfPresent,
@@ -207,7 +207,7 @@ const App: React.FC = () => {
             <div className="p-4">
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{t('Current Project')}</p>
               <div className="bg-slate-800 rounded p-2 text-sm text-slate-200 border border-slate-700">
-                <span className="bg-emerald-500 text-emerald-950 text-[10px] px-1.5 py-0.5 rounded mr-2 font-bold">{actor.kind.toUpperCase()}</span>
+                <span className="bg-emerald-500 text-emerald-950 text-[10px] px-1.5 py-0.5 rounded mr-2 font-bold">{translateKind(actor.kind).toUpperCase()}</span>
                 <select
                   aria-label={t('Current Project')}
                   value={summary.id}
@@ -262,7 +262,7 @@ const App: React.FC = () => {
                 </div>
                 <div className="text-sm">
                   <p className="text-white font-medium truncate max-w-36">{actor.subject}</p>
-                  <p className="text-slate-400 text-xs">{actor.roles.join(', ') || t('no role')}</p>
+                  <p className="text-slate-400 text-xs">{actor.roles.map(translateRole).join(', ') || t('no role')}</p>
                 </div>
               </div>
             </div>
@@ -307,7 +307,7 @@ const App: React.FC = () => {
                   </button>
                 )}
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 border border-slate-200">
-                  {actor.kind}
+                  {translateKind(actor.kind)}
                 </span>
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-200">
                   {loadState === 'connected' ? t('Connected') : loadState}

@@ -269,6 +269,12 @@ const translations: Record<string, { en: string; zh: string }> = {
   'Google Cloud Storage with generation preconditions is required.': { en: 'Google Cloud Storage with generation preconditions is required.', zh: '需要带世代前置条件的 Google Cloud Storage。' },
   'Model: {model}.': { en: 'Model: {model}.', zh: '模型：{model}。' },
   'Cloud deployment and registry validation are still required.': { en: 'Cloud deployment and registry validation are still required.', zh: '仍需云端部署与注册表校验。' },
+
+  // ---- 能力状态（/api/capabilities 的 state 值展示）----
+  'state.ready': { en: 'ready', zh: '就绪' },
+  'state.configured': { en: 'configured', zh: '已配置' },
+  'state.development': { en: 'development', zh: '开发模式' },
+  'state.not_configured': { en: 'not_configured', zh: '未配置' },
 };
 
 function interpolate(template: string, values: Record<string, string | number>): string {
@@ -320,6 +326,29 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
 export function useI18n(): LanguageContextValue {
   return useContext(LanguageContext);
+}
+
+// ---- 数据层标签（枚举值展示用；英文原样，中文翻译）----
+const KIND_LABELS: Record<string, string> = {
+  development: '开发',
+  oidc: 'OIDC',
+  disabled: '禁用'
+};
+const ROLE_LABELS: Record<string, string> = {
+  viewer: '查看者',
+  auditor: '审计员',
+  editor: '编辑者',
+  admin: '管理员'
+};
+
+/** 翻译身份类型（未知值原样返回） */
+export function translateKind(kind: string): string {
+  return KIND_LABELS[kind] ?? kind;
+}
+
+/** 翻译角色名（未知值原样返回） */
+export function translateRole(role: string): string {
+  return ROLE_LABELS[role] ?? role;
 }
 
 /** 翻译后端能力详情（含"鉴权模式 / 模型"这类动态值） */

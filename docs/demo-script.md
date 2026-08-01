@@ -4,7 +4,7 @@ The console UI now defaults to Chinese with an EN/中文 toggle in the header;
 UI names below carry both languages.
 
 1. Run `npm install --ignore-scripts`, `npm run seed`, then `npm run dev`.
-2. Open <http://localhost:5173> and show the seeded Phase Transition project.
+2. Open <http://localhost:5173> and show the seeded 相变研究（Phase Transition Study）project.
 3. Open **Lineage Explorer（溯源图谱）**, select `fig3.png`, and show the recorded
    run, code, dataset, parameters, environment, and evidence identifiers.
 4. Open **Guardian Agent（守护代理）** and ask:

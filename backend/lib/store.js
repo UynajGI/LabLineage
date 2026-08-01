@@ -23,7 +23,7 @@ export function stableEdgeId(edge) {
 export function makeDemoState() {
   const projectId = 'project_phase_transition';
   const nodes = [
-    { id: projectId, type: 'Project', label: 'Phase Transition Study', status: 'accepted', humanConfirmed: true, evidenceIds: ['ev_project'] },
+    { id: projectId, type: 'Project', label: '相变研究', status: 'accepted', humanConfirmed: true, evidenceIds: ['ev_project'] },
     { id: 'code_42f8', type: 'CodeVersion', label: 'analysis@42f8c1d', status: 'accepted', details: { commit: '42f8c1d', dirty: 'false' }, evidenceIds: ['ev_git_42f8'] },
     { id: 'dataset_raw_01', type: 'Dataset', label: 'measurements-v3.parquet', status: 'accepted', details: { hash: 'sha256:9c4b…', rows: '128400' }, evidenceIds: ['ev_dataset_hash'] },
     { id: 'params_paper', type: 'ParameterSet', label: 'configs/paper.yaml', status: 'accepted', evidenceIds: ['ev_params'] },
@@ -60,15 +60,15 @@ export function makeDemoState() {
   return {
     schemaVersion: 1,
     setupConfig: {
-      institutionName: 'Demo University',
-      labName: 'Complex Systems Lab',
-      adminDisplayName: 'Lab Admin',
+      institutionName: '示例大学',
+      labName: '复杂系统实验室',
+      adminDisplayName: '实验室管理员',
       adminEmail: 'admin@example.edu',
       dataResidency: 'local',
       defaultRegion: 'asia-east1',
       defaultTimezone: 'Asia/Shanghai',
       notificationLanguage: 'zh-CN',
-      defaultProjectName: 'Phase Transition Study',
+      defaultProjectName: '相变研究',
       defaultProjectSlug: 'phase-transition',
       departingMemberEmail: 'departing@example.edu',
       receivingMemberEmail: 'receiver@example.edu',
@@ -77,7 +77,7 @@ export function makeDemoState() {
     },
     projects: [{
       id: projectId,
-      name: 'Phase Transition Study',
+      name: '相变研究',
       slug: 'phase-transition',
       createdAt: iso(-30),
       updatedAt: iso(),

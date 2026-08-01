@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ShieldAlert, Key, Users, Activity, CheckCircle2, XCircle } from 'lucide-react';
 import { AuditEvent, SecuritySummary } from '../types';
 import { api } from '../services/api';
-import { useI18n } from '../i18n';
+import { useI18n, translateKind, translateRole } from '../i18n';
 
 interface SecurityAuditProps {
   events: AuditEvent[];
@@ -74,8 +74,8 @@ export const SecurityAudit: React.FC<SecurityAuditProps> = ({ events }) => {
             <li className="break-all font-mono text-xs text-slate-700">{summary?.actor.subject || t('Loading…')}</li>
             {(summary?.actor.roles || []).map((role) => (
               <li key={role} className="flex justify-between items-center">
-                <span className="text-slate-700">{role}</span>
-                <span className="text-xs text-slate-600">{summary?.actor.kind}</span>
+                <span className="text-slate-700">{translateRole(role)}</span>
+                <span className="text-xs text-slate-600">{summary ? translateKind(summary.actor.kind) : ''}</span>
               </li>
             ))}
           </ul>

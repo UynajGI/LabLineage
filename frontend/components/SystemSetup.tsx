@@ -112,7 +112,7 @@ export const SystemSetup: React.FC = () => {
                   {t(item.title)}
                 </div>
                 <p className="text-sm text-slate-600 mt-2">{translateCapabilityDetail(t, item.detail)}</p>
-                <code className="text-xs text-slate-500 mt-2 block">{item.state}</code>
+                <code className="text-xs text-slate-500 mt-2 block">{t(`state.${item.state}`)}</code>
               </article>
             );
           })}
