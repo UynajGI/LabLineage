@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { importPKCS8, SignJWT } from 'jose';
 
+const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
+
 export class GitHubClient {
   constructor({ token, baseUrl = 'https://api.github.com', fetchImpl = fetch } = {}) {
     if (!token) throw new Error('GitHub token is required');
@@ -32,14 +34,32 @@ export class GitHubClient {
     return response.json();
   }
 
+  async requestList(pathname, query = {}, { limit = 100, select = (value) => value } = {}) {
+    const items = [];
+    const perPage = Math.min(100, Math.max(1, limit));
+    for (let page = 1; items.length < limit; page += 1) {
+      const payload = await this.request(pathname, { ...query, per_page: perPage, page });
+      const batch = select(payload);
+      if (!Array.isArray(batch)) throw new Error('GitHub list response is invalid');
+      items.push(...batch.slice(0, limit - items.length));
+      if (batch.length < perPage) break;
+    }
+    return items;
+  }
+
   async collectRepository(owner, repo, { branch, limit = 50 } = {}) {
     const encoded = `${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
     const repository = await this.request(`/repos/${encoded}`);
     const resolvedBranch = branch || repository.default_branch;
-    const [commits, workflowRuns, pullRequests] = await Promise.all([
-      this.request(`/repos/${encoded}/commits`, { sha: resolvedBranch, per_page: Math.min(limit, 100) }),
-      this.request(`/repos/${encoded}/actions/runs`, { branch: resolvedBranch, per_page: Math.min(limit, 100) }),
-      this.request(`/repos/${encoded}/pulls`, { state: 'all', sort: 'updated', direction: 'desc', per_page: Math.min(limit, 100) })
+    const branchDetails = await this.request(`/repos/${encoded}/branches/${encodeURIComponent(resolvedBranch)}`);
+    const headSha = branchDetails.commit.sha;
+    const [commits, workflowRuns, pullRequests, tree, branches, tags] = await Promise.all([
+      this.requestList(`/repos/${encoded}/commits`, { sha: resolvedBranch }, { limit }),
+      this.requestList(`/repos/${encoded}/actions/runs`, { branch: resolvedBranch }, { limit, select: (value) => value.workflow_runs }),
+      this.requestList(`/repos/${encoded}/pulls`, { state: 'all', sort: 'updated', direction: 'desc' }, { limit }),
+      this.request(`/repos/${encoded}/git/trees/${encodeURIComponent(headSha)}`, { recursive: 1 }),
+      this.requestList(`/repos/${encoded}/branches`, {}, { limit: 500 }),
+      this.requestList(`/repos/${encoded}/tags`, {}, { limit: 500 })
     ]);
     return {
       repository: {
@@ -57,7 +77,7 @@ export class GitHubClient {
         authorLogin: commit.author?.login || null,
         htmlUrl: commit.html_url
       })),
-      workflowRuns: workflowRuns.workflow_runs.map((run) => ({
+      workflowRuns: workflowRuns.map((run) => ({
         id: run.id,
         name: run.name,
         event: run.event,
@@ -79,8 +99,54 @@ export class GitHubClient {
         baseBranch: pull.base?.ref,
         updatedAt: pull.updated_at,
         htmlUrl: pull.html_url
-      }))
+      })),
+      repositorySnapshot: {
+        headSha,
+        branch: resolvedBranch,
+        branches: branches.map((item) => ({ name: item.name, sha: item.commit.sha })),
+        tags: tags.map((item) => ({ name: item.name, sha: item.commit.sha })),
+        treeTruncated: Boolean(tree.truncated),
+        tree: (tree.tree || []).filter((item) => item.type === 'blob').map((item) => ({
+          pathToken: item.path,
+          kind: 'file',
+          sizeBytes: item.size || 0,
+          contentHash: item.sha,
+          fingerprint: { algorithm: 'git-blob-sha1', value: item.sha, strength: 'strong' }
+        }))
+      }
     };
+  }
+
+  async downloadRepositoryArchive(owner, repo, revision, { maxBytes = MAX_ARCHIVE_BYTES } = {}) {
+    const encoded = `${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const response = await this.fetch(`${this.baseUrl}/repos/${encoded}/zipball/${encodeURIComponent(revision)}`, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        authorization: `Bearer ${this.token}`,
+        'x-github-api-version': '2022-11-28',
+        'user-agent': 'lablineage-guardian'
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(Number(process.env.LABLINEAGE_INTEGRATION_TIMEOUT_MS || 15_000))
+    });
+    if (!response.ok) throw Object.assign(new Error(`GitHub archive API ${response.status}`), { statusCode: response.status });
+    const finalUrl = new URL(response.url || `${this.baseUrl}/repos/${encoded}/zipball/${revision}`);
+    const baseHost = new URL(this.baseUrl).hostname;
+    if (finalUrl.protocol !== 'https:' || !new Set([baseHost, 'codeload.github.com']).has(finalUrl.hostname)) {
+      throw Object.assign(new Error('GitHub archive redirect host is not allowed'), { statusCode: 502 });
+    }
+    const declared = Number(response.headers.get('content-length') || 0);
+    if (declared > maxBytes) throw Object.assign(new Error('GitHub archive exceeds the configured size limit'), { statusCode: 413 });
+    if (!response.body) throw Object.assign(new Error('GitHub archive response was empty'), { statusCode: 502 });
+    const chunks = [];
+    let sizeBytes = 0;
+    for await (const chunk of response.body) {
+      const buffer = Buffer.from(chunk);
+      sizeBytes += buffer.length;
+      if (sizeBytes > maxBytes) throw Object.assign(new Error('GitHub archive exceeds the configured size limit'), { statusCode: 413 });
+      chunks.push(buffer);
+    }
+    return { content: Buffer.concat(chunks), sizeBytes, resolvedUrlHost: finalUrl.hostname };
   }
 }
 
@@ -124,13 +190,14 @@ export function verifyGitHubWebhook(rawBody, signatureHeader, secret) {
 }
 
 export function githubEvidenceToGraph(projectId, evidence) {
+  const capturedAt = evidence.capturedAt || new Date().toISOString();
   const evidenceRecords = [
     ...evidence.commits.map((commit) => ({
       id: `ev_github_commit_${commit.sha}`,
       projectId,
       evidenceType: 'github_commit',
       source: evidence.repository.fullName,
-      capturedAt: new Date().toISOString(),
+      capturedAt,
       payload: commit
     })),
     ...evidence.workflowRuns.map((run) => ({
@@ -138,7 +205,7 @@ export function githubEvidenceToGraph(projectId, evidence) {
       projectId,
       evidenceType: 'github_workflow_run',
       source: evidence.repository.fullName,
-      capturedAt: new Date().toISOString(),
+      capturedAt,
       payload: run
     })),
     ...evidence.pullRequests.map((pull) => ({
@@ -146,7 +213,7 @@ export function githubEvidenceToGraph(projectId, evidence) {
       projectId,
       evidenceType: 'github_pull_request',
       source: evidence.repository.fullName,
-      capturedAt: new Date().toISOString(),
+      capturedAt,
       payload: pull
     })),
     ...(evidence.repositorySnapshot ? [{
@@ -154,7 +221,7 @@ export function githubEvidenceToGraph(projectId, evidence) {
       projectId,
       evidenceType: 'repository_snapshot',
       source: evidence.repository.fullName,
-      capturedAt: new Date().toISOString(),
+      capturedAt,
       payload: evidence.repositorySnapshot
     }] : [])
   ];

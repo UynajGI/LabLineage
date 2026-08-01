@@ -71,7 +71,23 @@ function configuredModel() {
   const apiKey = process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
   const expressMode = /^true$/i.test(process.env.LABLINEAGE_VERTEX_EXPRESS || '') || apiKey?.startsWith('AQ.');
   configureProxy();
-  return expressMode && apiKey ? new ExpressModeGemini(model, apiKey) : model;
+  if (expressMode && apiKey) return new ExpressModeGemini(model, apiKey);
+  if (/^true$/i.test(process.env.GOOGLE_GENAI_USE_VERTEXAI || '')) {
+    return new Gemini({
+      model,
+      vertexai: true,
+      project: process.env.GOOGLE_CLOUD_PROJECT,
+      location: process.env.GOOGLE_CLOUD_LOCATION || 'global',
+    });
+  }
+  return model;
+}
+
+export function guardianModelConfigured(env = process.env) {
+  if (env.GOOGLE_GENAI_API_KEY || env.GEMINI_API_KEY) return true;
+  return /^true$/i.test(env.GOOGLE_GENAI_USE_VERTEXAI || '')
+    && Boolean(env.GOOGLE_CLOUD_PROJECT)
+    && Boolean(env.GOOGLE_CLOUD_LOCATION);
 }
 
 function projectData(state, projectId) {
@@ -494,8 +510,8 @@ export async function runGuardianAgent(store, {
   mcpUrl,
   mcpToken
 }) {
-  if (!process.env.GOOGLE_GENAI_API_KEY && !process.env.GEMINI_API_KEY) {
-    throw Object.assign(new Error('GOOGLE_GENAI_API_KEY is not configured on the backend'), { statusCode: 503 });
+  if (!guardianModelConfigured()) {
+    throw Object.assign(new Error('Configure a Gemini API key or Vertex AI Application Default Credentials'), { statusCode: 503 });
   }
   const agent = createGuardianAgent(store, projectId, { mcpUrl, mcpToken });
   const sessionService = new GuardianSessionService(store, projectId);

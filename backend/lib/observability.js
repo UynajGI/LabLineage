@@ -104,6 +104,34 @@ export function renderPrometheusMetrics(state = {}) {
     '# TYPE lablineage_idempotency_records gauge',
     `lablineage_idempotency_records ${(state.idempotencyRecords || []).length}`
   );
+  const analysisRuns = state.analysisRuns || [];
+  lines.push(
+    '# HELP lablineage_analysis_runs Current automatic analysis runs by status.',
+    '# TYPE lablineage_analysis_runs gauge'
+  );
+  for (const status of ['queued', 'ingesting', 'scanning', 'graphing', 'auditing', 'summarizing', 'completed', 'partial', 'failed', 'cancelled']) {
+    lines.push(`lablineage_analysis_runs{status="${status}"} ${analysisRuns.filter((run) => run.status === status).length}`);
+  }
+  const analysisSteps = state.analysisRunSteps || [];
+  lines.push(
+    '# HELP lablineage_analysis_steps Current automatic analysis steps by name and status.',
+    '# TYPE lablineage_analysis_steps gauge'
+  );
+  for (const name of ['ingest', 'scan', 'graph', 'audit', 'goal_coverage', 'agent_summary', 'finalize']) {
+    for (const status of ['pending', 'running', 'succeeded', 'failed', 'skipped', 'cancelled']) {
+      lines.push(`lablineage_analysis_steps{name="${name}",status="${status}"} ${analysisSteps.filter((step) => step.name === name && step.status === status).length}`);
+    }
+  }
+  const oldestAnalysisQueued = analysisRuns
+    .filter((run) => run.status === 'queued')
+    .map((run) => Date.parse(run.queuedAt))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right)[0];
+  lines.push(
+    '# HELP lablineage_analysis_oldest_queued_seconds Age of the oldest queued automatic analysis run.',
+    '# TYPE lablineage_analysis_oldest_queued_seconds gauge',
+    `lablineage_analysis_oldest_queued_seconds ${oldestAnalysisQueued ? Math.max(0, (Date.now() - oldestAnalysisQueued) / 1000) : 0}`
+  );
   return `${lines.join('\n')}\n`;
 }
 

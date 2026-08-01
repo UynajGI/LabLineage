@@ -12,6 +12,19 @@ const routeDefinitions = [
   ['get', '/v1/security/summary', 'Read administrator security summary'],
   ['get', '/v1/projects', 'List visible projects'],
   ['post', '/v1/projects', 'Create a project'],
+  ['get', '/v1/projects/{projectId}', 'Read project details and the current objective version'],
+  ['post', '/v1/projects/{projectId}/intent-versions', 'Create an immutable project objective version'],
+  ['get', '/v1/projects/{projectId}/collectors', 'List collector pairings and registered devices'],
+  ['post', '/v1/projects/{projectId}/collector-pairings', 'Create a short-lived one-time collector pairing code'],
+  ['post', '/v1/collector/pairings/{pairingId}/claim', 'Claim a pairing with an Ed25519 device public key'],
+  ['post', '/v1/projects/{projectId}/collectors/{collectorId}/revoke', 'Revoke a paired collector and disconnect its source'],
+  ['post', '/v1/projects/{projectId}/collector-runs', 'Submit a signed local collector manifest and start analysis'],
+  ['get', '/v1/projects/{projectId}/analysis-runs', 'List durable project analysis runs'],
+  ['get', '/v1/projects/{projectId}/analysis-runs/{runId}', 'Read an analysis run, its real steps and events'],
+  ['post', '/v1/projects/{projectId}/analysis-runs/{runId}/retry', 'Retry an allowed failed analysis step'],
+  ['post', '/v1/projects/{projectId}/analysis-runs/{runId}/cancel', 'Cancel pending analysis work'],
+  ['get', '/v1/projects/{projectId}/analysis-runs/{runId}/report', 'Read an immutable objective assessment report'],
+  ['post', '/v1/projects/{projectId}/sources/github', 'Connect a read-only GitHub App repository and start analysis'],
   ['get', '/v1/projects/{projectId}/sources', 'List project sources'],
   ['post', '/v1/projects/{projectId}/sources', 'Register a project source'],
   ['post', '/v1/sources/{sourceId}/disconnect', 'Disconnect a source while retaining evidence'],
@@ -45,7 +58,7 @@ const routeDefinitions = [
   ['get', '/v1/projects/{projectId}/audit-events', 'Read immutable audit events'],
   ['post', '/v1/projects/{projectId}/nodes/{nodeId}/confirm', 'Confirm an inferred node'],
   ['post', '/v1/projects/{projectId}/snapshots', 'Scan an allowlisted server directory'],
-  ['post', '/v1/projects/{projectId}/archives', 'Upload a project archive (zip) and scan it'],
+  ['post', '/v1/projects/{projectId}/archives', 'Upload a one-time fallback project archive and start analysis'],
   ['post', '/v1/projects/{projectId}/lineage-proposals', 'Apply an agent-inferred lineage proposal'],
   ['get', '/v1/projects/{projectId}/lineage-proposals', 'List lineage proposals for a project'],
   ['get', '/v1/projects/{projectId}/changes', 'Read latest project changes'],
@@ -70,7 +83,14 @@ const routeDefinitions = [
 
 const responseStatus = new Map([
   ['post /v1/sources/{sourceId}/bundles', '202'],
+  ['post /v1/projects/{projectId}/collector-pairings', '201'],
+  ['post /v1/collector/pairings/{pairingId}/claim', '201'],
   ['post /v1/ingestion-jobs/{jobId}/retry', '202'],
+  ['post /v1/projects/{projectId}/collector-runs', '202'],
+  ['post /v1/projects/{projectId}/analysis-runs/{runId}/retry', '202'],
+  ['post /v1/projects/{projectId}/analysis-runs/{runId}/cancel', '202'],
+  ['post /v1/projects/{projectId}/sources/github', '202'],
+  ['post /v1/projects/{projectId}/archives', '202'],
   ['post /v1/manifests', '202'],
   ['post /v1/manifests/batch', '207'],
   ['post /v1/projects/{projectId}/nodes/{nodeId}/confirm', '204'],
@@ -87,6 +107,46 @@ const idempotencyRequired = new Set(
 );
 
 const requestSchemaByRoute = {
+  'post /v1/projects': { $ref: '#/components/schemas/CreateProjectRequest' },
+  'post /v1/projects/{projectId}/intent-versions': { $ref: '#/components/schemas/CreateIntentVersionRequest' },
+  'post /v1/projects/{projectId}/collector-pairings': {
+    type: 'object', additionalProperties: false,
+    properties: { expiresInSeconds: { type: 'integer', minimum: 60, maximum: 900, default: 600 } }
+  },
+  'post /v1/collector/pairings/{pairingId}/claim': {
+    type: 'object', additionalProperties: false, required: ['code', 'publicKeyPem', 'deviceName'],
+    properties: {
+      code: { type: 'string', minLength: 8, maxLength: 32 },
+      publicKeyPem: { type: 'string', minLength: 80, maxLength: 5000 },
+      deviceName: { type: 'string', minLength: 1, maxLength: 160 }
+    }
+  },
+  'post /v1/projects/{projectId}/collectors/{collectorId}/revoke': {
+    type: 'object', additionalProperties: false, required: ['confirmation'],
+    properties: { confirmation: { const: 'REVOKE_COLLECTOR' } }
+  },
+  'post /v1/projects/{projectId}/collector-runs': { $ref: '#/components/schemas/SignedBundle' },
+  'post /v1/projects/{projectId}/analysis-runs/{runId}/retry': {
+    type: 'object', additionalProperties: false, required: ['expectedVersion', 'confirmation'],
+    properties: {
+      expectedVersion: { type: 'integer', minimum: 1 },
+      confirmation: { const: 'RETRY_ANALYSIS_RUN' }
+    }
+  },
+  'post /v1/projects/{projectId}/analysis-runs/{runId}/cancel': {
+    type: 'object', additionalProperties: false, required: ['expectedVersion', 'confirmation'],
+    properties: {
+      expectedVersion: { type: 'integer', minimum: 1 },
+      confirmation: { const: 'CANCEL_ANALYSIS_RUN' }
+    }
+  },
+  'post /v1/projects/{projectId}/sources/github': {
+    type: 'object', additionalProperties: false, required: ['repository'],
+    properties: {
+      repository: { type: 'string', minLength: 3, maxLength: 300, description: 'github.com URL or owner/repo' },
+      branch: { type: 'string', minLength: 1, maxLength: 250 }
+    }
+  },
   'post /v1/projects/{projectId}/sources': { $ref: '#/components/schemas/CreateSourceRequest' },
   'post /v1/sources/{sourceId}/bundles': {
     oneOf: [
@@ -291,6 +351,37 @@ const requestSchemaByRoute = {
   }
 };
 
+const responseSchemaByRoute = {
+  'get /v1/projects': {
+    type: 'array',
+    items: { $ref: '#/components/schemas/ProjectSummary' }
+  },
+  'post /v1/projects': { $ref: '#/components/schemas/ProjectDetail' },
+  'get /v1/projects/{projectId}': { $ref: '#/components/schemas/ProjectDetail' },
+  'post /v1/projects/{projectId}/intent-versions': { $ref: '#/components/schemas/ProjectIntent' },
+  'get /v1/projects/{projectId}/collectors': {
+    type: 'object', additionalProperties: false, required: ['pairings', 'collectors'],
+    properties: {
+      pairings: { type: 'array', items: { $ref: '#/components/schemas/CollectorPairing' } },
+      collectors: { type: 'array', items: { $ref: '#/components/schemas/CollectorCredential' } }
+    }
+  },
+  'post /v1/projects/{projectId}/collector-pairings': { $ref: '#/components/schemas/CollectorPairingWithCode' },
+  'post /v1/collector/pairings/{pairingId}/claim': { $ref: '#/components/schemas/CollectorClaimResponse' },
+  'post /v1/projects/{projectId}/collectors/{collectorId}/revoke': { $ref: '#/components/schemas/CollectorCredential' },
+  'post /v1/projects/{projectId}/collector-runs': { $ref: '#/components/schemas/AnalysisRunAccepted' },
+  'post /v1/projects/{projectId}/sources/github': { $ref: '#/components/schemas/AnalysisRunAccepted' },
+  'post /v1/projects/{projectId}/archives': { $ref: '#/components/schemas/AnalysisRunAccepted' },
+  'get /v1/projects/{projectId}/analysis-runs': {
+    type: 'object', additionalProperties: false, required: ['runs'],
+    properties: { runs: { type: 'array', items: { $ref: '#/components/schemas/AnalysisRun' } } }
+  },
+  'get /v1/projects/{projectId}/analysis-runs/{runId}': { $ref: '#/components/schemas/AnalysisRun' },
+  'post /v1/projects/{projectId}/analysis-runs/{runId}/retry': { $ref: '#/components/schemas/AnalysisRun' },
+  'post /v1/projects/{projectId}/analysis-runs/{runId}/cancel': { $ref: '#/components/schemas/AnalysisRun' },
+  'get /v1/projects/{projectId}/analysis-runs/{runId}/report': { $ref: '#/components/schemas/ObjectiveAssessmentReport' }
+};
+
 function operationId(method, route) {
   return `${method}_${route}`.replace(/[{}]/g, '').replace(/[^a-zA-Z0-9]+(.)/g, (_match, next) => next.toUpperCase());
 }
@@ -328,7 +419,7 @@ for (const [method, route, summary, isPublic = false] of routeDefinitions) {
       requestBody: {
         required: true,
         content: {
-          'application/json': {
+          [key === 'post /v1/projects/{projectId}/archives' ? 'multipart/form-data' : 'application/json']: {
             schema: requestSchemaByRoute[key] || { type: 'object', additionalProperties: true }
           }
         }
@@ -338,7 +429,7 @@ for (const [method, route, summary, isPublic = false] of routeDefinitions) {
       [success]: {
         description: 'Successful response',
         ...(!['204'].includes(success) ? {
-          content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } }
+          content: { 'application/json': { schema: responseSchemaByRoute[key] || { type: 'object', additionalProperties: true } } }
         } : {})
       },
       '400': { $ref: '#/components/responses/BadRequest' },
@@ -384,6 +475,277 @@ export const openApiDocument = {
           error: { type: 'string' },
           requestId: { type: 'string' },
           issues: { type: 'array', items: { type: 'object', additionalProperties: true } }
+        }
+      },
+      SuccessCriterionInput: {
+        oneOf: [
+          { type: 'string', minLength: 1, maxLength: 1000 },
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['description'],
+            properties: {
+              description: { type: 'string', minLength: 1, maxLength: 1000 },
+              required: { type: 'boolean', default: true }
+            }
+          }
+        ]
+      },
+      KeyOutputInput: {
+        oneOf: [
+          { type: 'string', minLength: 1, maxLength: 300 },
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['name'],
+            properties: {
+              name: { type: 'string', minLength: 1, maxLength: 300 },
+              kind: { enum: ['artifact', 'code', 'dataset', 'figure', 'report', 'environment', 'other'], default: 'artifact' },
+              expectedPathHint: { type: 'string', minLength: 1, maxLength: 500 },
+              required: { type: 'boolean', default: true }
+            }
+          }
+        ]
+      },
+      ProjectIntentInput: {
+        type: 'object',
+        required: ['objective', 'successCriteria'],
+        properties: {
+          objective: { type: 'string', minLength: 1, maxLength: 4000 },
+          successCriteria: {
+            type: 'array', minItems: 1, maxItems: 20,
+            items: { $ref: '#/components/schemas/SuccessCriterionInput' }
+          },
+          keyOutputs: {
+            type: 'array', maxItems: 20,
+            items: { $ref: '#/components/schemas/KeyOutputInput' }
+          },
+          constraints: {
+            type: 'array', maxItems: 20,
+            items: { type: 'string', minLength: 1, maxLength: 1000 }
+          }
+        }
+      },
+      CreateProjectRequest: {
+        unevaluatedProperties: false,
+        allOf: [
+          { $ref: '#/components/schemas/ProjectIntentInput' },
+          {
+            type: 'object',
+            required: ['name'],
+            properties: {
+              name: { type: 'string', minLength: 1, maxLength: 120 },
+              slug: { type: 'string', pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$', maxLength: 120 }
+            }
+          }
+        ]
+      },
+      CreateIntentVersionRequest: {
+        unevaluatedProperties: false,
+        allOf: [
+          { $ref: '#/components/schemas/ProjectIntentInput' },
+          {
+            type: 'object',
+            required: ['expectedVersion'],
+            properties: { expectedVersion: { type: 'integer', minimum: 1 } }
+          }
+        ]
+      },
+      ProjectIntent: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'projectId', 'version', 'objective', 'constraints', 'legacy', 'createdBySubject', 'createdAt', 'successCriteria', 'keyOutputs'],
+        properties: {
+          id: { type: 'string' },
+          projectId: { type: 'string' },
+          version: { type: 'integer', minimum: 1 },
+          objective: { type: 'string' },
+          constraints: { type: 'array', items: { type: 'string' } },
+          legacy: { type: 'boolean' },
+          createdBySubject: { type: 'string' },
+          createdAt: { type: 'string', format: 'date-time' },
+          successCriteria: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          keyOutputs: { type: 'array', items: { type: 'object', additionalProperties: true } }
+        }
+      },
+      ProjectSummary: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'name', 'slug', 'objective', 'intentVersion', 'intentConfigured', 'totalAssets', 'reproducibilityScores', 'openFindings', 'lastScan'],
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          slug: { type: 'string' },
+          objective: { type: ['string', 'null'] },
+          intentVersion: { type: ['integer', 'null'] },
+          intentConfigured: { type: 'boolean' },
+          totalAssets: { type: 'integer', minimum: 0 },
+          reproducibilityScores: { type: 'object', additionalProperties: { type: 'integer', minimum: 0 } },
+          openFindings: { type: 'integer', minimum: 0 },
+          lastScan: { type: 'string' }
+        }
+      },
+      ProjectDetail: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'name', 'slug', 'createdAt', 'updatedAt', 'intent'],
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          slug: { type: 'string' },
+          currentIntentVersion: { type: 'integer', minimum: 1 },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+          lastScan: { type: 'string', format: 'date-time' },
+          intent: { $ref: '#/components/schemas/ProjectIntent' }
+        }
+      },
+      AnalysisRunStep: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'runId', 'projectId', 'name', 'status', 'attempt', 'artifactRefs', 'createdAt', 'updatedAt'],
+        properties: {
+          id: { type: 'string' },
+          runId: { type: 'string' },
+          projectId: { type: 'string' },
+          name: { enum: ['ingest', 'scan', 'graph', 'audit', 'goal_coverage', 'agent_summary', 'finalize'] },
+          status: { enum: ['pending', 'running', 'succeeded', 'failed', 'skipped', 'cancelled'] },
+          attempt: { type: 'integer', minimum: 0 },
+          inputSha256: { type: ['string', 'null'], pattern: '^[a-f0-9]{64}$' },
+          outputSha256: { type: ['string', 'null'], pattern: '^[a-f0-9]{64}$' },
+          artifactRefs: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          errorCode: { type: ['string', 'null'] },
+          errorSummary: { type: ['string', 'null'] },
+          startedAt: { type: ['string', 'null'], format: 'date-time' },
+          completedAt: { type: ['string', 'null'], format: 'date-time' },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' }
+        }
+      },
+      CollectorPairing: {
+        type: 'object', additionalProperties: false,
+        required: ['id', 'projectId', 'status', 'createdBySubject', 'expiresAt', 'createdAt', 'updatedAt'],
+        properties: {
+          id: { type: 'string' }, projectId: { type: 'string' },
+          status: { enum: ['pending', 'claimed', 'expired', 'revoked'] },
+          collectorId: { type: 'string' }, sourceId: { type: 'string' },
+          createdBySubject: { type: 'string' },
+          expiresAt: { type: 'string', format: 'date-time' },
+          claimedAt: { type: 'string', format: 'date-time' },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' }
+        }
+      },
+      CollectorPairingWithCode: {
+        allOf: [
+          { $ref: '#/components/schemas/CollectorPairing' },
+          { type: 'object', required: ['code'], properties: { code: { type: 'string' } } }
+        ]
+      },
+      CollectorCredential: {
+        type: 'object', additionalProperties: false,
+        required: ['id', 'collectorId', 'projectId', 'sourceId', 'pairingId', 'publicKeyFingerprint', 'status', 'expiresAt', 'createdAt', 'updatedAt'],
+        properties: {
+          id: { type: 'string' }, collectorId: { type: 'string' }, projectId: { type: 'string' },
+          sourceId: { type: 'string' }, pairingId: { type: 'string' },
+          publicKeyFingerprint: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+          status: { enum: ['active', 'revoked', 'expired'] },
+          expiresAt: { type: 'string', format: 'date-time' },
+          revokedAt: { type: 'string', format: 'date-time' },
+          revokedBySubject: { type: 'string' },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' }
+        }
+      },
+      CollectorClaimResponse: {
+        type: 'object', additionalProperties: false, required: ['pairing', 'collector', 'source', 'submitUrl'],
+        properties: {
+          pairing: { $ref: '#/components/schemas/CollectorPairing' },
+          collector: { $ref: '#/components/schemas/CollectorCredential' },
+          source: { type: 'object', additionalProperties: true },
+          submitUrl: { type: 'string' }
+        }
+      },
+      AnalysisRunAccepted: {
+        type: 'object', additionalProperties: false,
+        required: ['sourceId', 'runId', 'statusUrl', 'idempotent'],
+        properties: {
+          sourceId: { type: 'string' }, runId: { type: 'string' },
+          statusUrl: { type: 'string' }, idempotent: { type: 'boolean' }
+        }
+      },
+      AnalysisRunEvent: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'runId', 'projectId', 'eventType', 'actorSubject', 'payload', 'createdAt'],
+        properties: {
+          id: { type: 'string' },
+          runId: { type: 'string' },
+          projectId: { type: 'string' },
+          eventType: { type: 'string' },
+          actorSubject: { type: 'string' },
+          payload: { type: 'object', additionalProperties: true },
+          createdAt: { type: 'string', format: 'date-time' }
+        }
+      },
+      AnalysisReportSummary: {
+        type: ['object', 'null'],
+        additionalProperties: false,
+        required: ['id', 'overallStatus', 'coverageScore', 'createdAt'],
+        properties: {
+          id: { type: 'string' },
+          overallStatus: { enum: ['supported', 'partial', 'missing', 'conflicted', 'not_assessable'] },
+          coverageScore: { type: 'integer', minimum: 0, maximum: 100 },
+          createdAt: { type: 'string', format: 'date-time' }
+        }
+      },
+      AnalysisRun: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'projectId', 'intentVersionId', 'intentVersion', 'sourceId', 'sourceRevision', 'status', 'currentStep', 'version', 'attempts', 'retryCount', 'deterministicReady', 'queuedAt', 'createdAt', 'updatedAt', 'steps', 'events', 'report'],
+        properties: {
+          id: { type: 'string' },
+          projectId: { type: 'string' },
+          intentVersionId: { type: 'string' },
+          intentVersion: { type: 'integer', minimum: 1 },
+          sourceId: { type: ['string', 'null'] },
+          sourceRevision: { type: ['string', 'null'] },
+          status: { enum: ['queued', 'ingesting', 'scanning', 'graphing', 'auditing', 'summarizing', 'completed', 'partial', 'failed', 'cancelled'] },
+          currentStep: { type: ['string', 'null'], enum: ['ingest', 'scan', 'graph', 'audit', 'goal_coverage', 'agent_summary', 'finalize', null] },
+          version: { type: 'integer', minimum: 1 },
+          attempts: { type: 'integer', minimum: 0 },
+          retryCount: { type: 'integer', minimum: 0 },
+          deterministicReady: { type: 'boolean' },
+          errorCode: { type: ['string', 'null'] },
+          errorSummary: { type: ['string', 'null'] },
+          queuedAt: { type: 'string', format: 'date-time' },
+          startedAt: { type: ['string', 'null'], format: 'date-time' },
+          completedAt: { type: ['string', 'null'], format: 'date-time' },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+          steps: { type: 'array', items: { $ref: '#/components/schemas/AnalysisRunStep' } },
+          events: { type: 'array', items: { $ref: '#/components/schemas/AnalysisRunEvent' } },
+          report: { $ref: '#/components/schemas/AnalysisReportSummary' }
+        }
+      },
+      ObjectiveAssessmentReport: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'runId', 'projectId', 'intentVersionId', 'overallStatus', 'coverageScore', 'sha256', 'mediaType', 'createdAt', 'document'],
+        properties: {
+          id: { type: 'string' },
+          runId: { type: 'string' },
+          projectId: { type: 'string' },
+          intentVersionId: { type: 'string' },
+          auditExternalId: { type: ['string', 'null'] },
+          overallStatus: { enum: ['supported', 'partial', 'missing', 'conflicted', 'not_assessable'] },
+          coverageScore: { type: 'integer', minimum: 0, maximum: 100 },
+          sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+          mediaType: { type: 'string' },
+          model: { type: ['string', 'null'] },
+          traceId: { type: ['string', 'null'] },
+          createdAt: { type: 'string', format: 'date-time' },
+          document: { type: 'object', additionalProperties: true }
         }
       },
       Fingerprint: {

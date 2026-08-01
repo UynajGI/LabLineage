@@ -2,12 +2,12 @@ import 'dotenv/config';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ZodError, z } from 'zod';
 import { createAudit } from './lib/audit.js';
-import { runGuardianAgent } from './lib/agent.js';
+import { guardianModelConfigured, runGuardianAgent } from './lib/agent.js';
 import { GuardianSessionService } from './lib/agent-session-service.js';
 import { authenticateRequest, authMode, authorizeProject, authorizeRole, serviceActorSummaries } from './lib/auth.js';
 import { postgresConfigured } from './lib/database.js';
@@ -18,6 +18,18 @@ import {
 } from './lib/mcp-server.js';
 import { recordAgentUsage, renderPrometheusMetrics, requestObservability, structuredLog } from './lib/observability.js';
 import { createObjectStore } from './lib/object-store.js';
+import { deploymentProfile, publicDeploymentCapabilities } from './lib/deployment-mode.js';
+import { createAnalysisDispatcher } from './lib/analysis-dispatcher.js';
+import { executeAnalysisRun } from './lib/analysis-pipeline.js';
+import { authenticateCloudTask } from './lib/cloud-task-auth.js';
+import {
+  authenticateCollectorSignature,
+  claimCollectorPairing,
+  createCollectorPairing,
+  publicCollectorCredential,
+  publicCollectorPairing,
+  revokeCollectorCredential,
+} from './lib/collector-pairing.js';
 import { importManifest } from './lib/manifest.js';
 import { createIdempotencyMiddleware } from './lib/idempotency.js';
 import {
@@ -27,6 +39,20 @@ import {
   scanDirectory
 } from './lib/scanner.js';
 import { projectSummary, stableEdgeId } from './lib/store.js';
+import {
+  IntentVersionConflictError,
+  appendNextProjectIntent,
+  appendProjectIntent,
+  createIntentVersionSchema,
+  createProjectSchema,
+  projectDetail
+} from './lib/project-intents.js';
+import {
+  cancelAnalysisRun,
+  createAnalysisRun,
+  publicAnalysisRun,
+  retryAnalysisRun,
+} from './lib/project-analysis.js';
 import { extractArchive, uploadArchiveMiddleware } from './lib/upload.js';
 import { LINEAGE_NODE_TYPES, LINEAGE_RELATIONS, prepareLineageProposal } from './lib/lineage-proposals.js';
 import {
@@ -53,10 +79,32 @@ import { buildHandoffPayload, createGoogleWorkspaceClientFromEnv } from './lib/i
 import { openApiDocument } from './openapi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const runtimeDeployment = deploymentProfile();
 const port = Number(process.env.LABLINEAGE_PORT || process.env.PORT || 8788);
-const host = process.env.LABLINEAGE_HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
+const host = process.env.LABLINEAGE_HOST || (runtimeDeployment.mode === 'google_cloud' ? '0.0.0.0' : '127.0.0.1');
 export const store = await createStore();
 const requireIdempotentWrite = createIdempotencyMiddleware(store);
+const analysisObjectStore = {
+  putImmutable: (input) => createObjectStore({ dataDir: store.dataDir }).putImmutable(input),
+  get: (key) => createObjectStore({ dataDir: store.dataDir }).get(key),
+};
+const analysisDispatcher = createAnalysisDispatcher({ store, objectStore: analysisObjectStore });
+
+function parseGitHubRepository(value) {
+  const raw = String(value || '').trim();
+  let pathValue = raw;
+  if (/^https?:\/\//iu.test(raw)) {
+    let url;
+    try { url = new URL(raw); } catch { throw Object.assign(new Error('GitHub repository URL is invalid'), { statusCode: 400 }); }
+    if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== 'github.com' || url.username || url.password || url.search || url.hash || url.port) {
+      throw Object.assign(new Error('Only canonical HTTPS github.com repository URLs are accepted'), { statusCode: 400 });
+    }
+    pathValue = url.pathname.replace(/^\/+|\/+$/gu, '');
+  }
+  const match = pathValue.replace(/\.git$/iu, '').match(/^([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})$/u);
+  if (!match) throw Object.assign(new Error('Repository must be a GitHub URL or owner/repo'), { statusCode: 400 });
+  return { owner: match[1], repo: match[2] };
+}
 
 function projectGraph(state, projectId) {
   const project = state.projects.find((item) => item.id === projectId);
@@ -420,7 +468,7 @@ async function recoverIngestionJobs() {
   }
 }
 
-export function buildApp() {
+export function buildApp({ githubClientFactory = createGitHubClientFromEnv } = {}) {
   const app = express();
   app.disable('x-powered-by');
   if (process.env.LABLINEAGE_TRUST_PROXY === 'true' || process.env.NODE_ENV === 'production') {
@@ -518,6 +566,137 @@ export function buildApp() {
       await handleReadOnlyMcpRequest(store, req, res);
     }
   );
+
+  app.post(
+    '/v1/collector/pairings/:pairingId/claim',
+    rateLimit({ windowMs: 60_000, limit: 10, standardHeaders: true, legacyHeaders: false }),
+    (req, _res, next) => {
+      req.actor = { subject: `pairing-claim:${req.params.pairingId}`, roles: [], projects: [], kind: 'pairing' };
+      next();
+    },
+    requireIdempotentWrite,
+    async (req, res) => {
+      if (typeof store.refresh === 'function') await store.refresh();
+      const input = z.object({
+        code: z.string().min(8).max(32),
+        publicKeyPem: z.string().min(80).max(5_000),
+        deviceName: z.string().trim().min(1).max(160),
+      }).strict().parse(req.body);
+      let claimed;
+      await store.update((state) => {
+        claimed = claimCollectorPairing(state, { pairingId: req.params.pairingId, ...input });
+      });
+      await store.log({
+        action: 'claim_collector_pairing',
+        actor: `service:${claimed.collector.collectorId}`,
+        resource: `project/${claimed.collector.projectId}/collector/${claimed.collector.collectorId}`,
+        details: `Paired collector fingerprint ${claimed.collector.publicKeyFingerprint.slice(0, 12)}.`,
+      });
+      res.status(201).json({
+        pairing: claimed.pairing,
+        collector: claimed.collector,
+        source: claimed.source,
+        submitUrl: `/v1/projects/${encodeURIComponent(claimed.collector.projectId)}/collector-runs`,
+      });
+    },
+  );
+
+  const requireSignedCollector = async (req, res, next) => {
+    try {
+      if (typeof store.refresh === 'function') await store.refresh();
+      const project = store.get().projects.find((item) => item.id === req.params.projectId);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      const imported = importManifest(req.body, project.id, { requireSignature: true });
+      if (imported.manifest.project_key !== project.slug && imported.manifest.project_id !== project.id) {
+        return res.status(409).json({ error: 'Collector manifest belongs to another project' });
+      }
+      const authenticated = authenticateCollectorSignature(store.get(), {
+        projectId: project.id,
+        publicKeyFingerprint: imported.signerFingerprint,
+      });
+      if (!authenticated) return res.status(401).json({ error: 'Collector is not paired, has expired, or was revoked' });
+      req.actor = authenticated.actor;
+      req.collectorAuthentication = authenticated;
+      req.verifiedCollectorManifest = imported.manifest;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  app.post(
+    '/v1/projects/:projectId/collector-runs',
+    rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: true, legacyHeaders: false }),
+    requireSignedCollector,
+    requireIdempotentWrite,
+    async (req, res) => {
+      const manifest = req.verifiedCollectorManifest;
+      const content = Buffer.from(JSON.stringify(req.body));
+      const inputSha256 = createHash('sha256').update(content).digest('hex');
+      const inputObjectKey = `collector-bundles/${req.params.projectId}/${manifest.bundle_id}/${inputSha256}.json`;
+      await analysisObjectStore.putImmutable({
+        key: inputObjectKey,
+        content,
+        contentType: 'application/json',
+        metadata: {
+          projectId: req.params.projectId,
+          sourceId: req.collectorAuthentication.source.id,
+          bundleId: manifest.bundle_id,
+        },
+      });
+      const sourceRevision = manifest.directory_fingerprint?.value || manifest.bundle_id;
+      let created;
+      await store.update((state) => {
+        created = createAnalysisRun(state, {
+          projectId: req.params.projectId,
+          sourceId: req.collectorAuthentication.source.id,
+          sourceRevision,
+          inputKind: 'collector_manifest',
+          inputObjectKey,
+          inputSha256,
+          idempotencyKey: req.get('idempotency-key'),
+          actorSubject: req.actor.subject,
+        });
+      });
+      await analysisDispatcher.dispatch(created.run.id);
+      if (!created.idempotent) {
+        await store.log({
+          action: 'queue_collector_analysis',
+          actor: req.actor.subject,
+          resource: `project/${req.params.projectId}/analysis-run/${created.run.id}`,
+          details: `Queued signed collector bundle ${manifest.bundle_id}.`,
+        });
+      }
+      res.status(202).location(`/v1/projects/${req.params.projectId}/analysis-runs/${created.run.id}`).json({
+        sourceId: created.run.sourceId,
+        runId: created.run.id,
+        statusUrl: `/v1/projects/${req.params.projectId}/analysis-runs/${created.run.id}`,
+        idempotent: created.idempotent,
+      });
+    },
+  );
+
+  app.post(
+    '/internal/analysis-worker',
+    rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true, legacyHeaders: false }),
+    (req, res, next) => runtimeDeployment.mode === 'google_cloud'
+      ? next()
+      : res.status(404).json({ error: 'Cloud analysis worker is not enabled' }),
+    authenticateCloudTask(),
+    async (req, res) => {
+      const input = z.object({ runId: z.string().min(1).max(200) }).strict().parse(req.body);
+      const taskName = req.get('x-cloudtasks-taskname');
+      if (!taskName) return res.status(400).json({ error: 'Cloud Tasks request metadata is required' });
+      const run = (store.get().analysisRuns || []).find((item) => item.id === input.runId);
+      if (!run) return res.status(404).json({ error: 'Analysis run not found' });
+      const completed = await executeAnalysisRun(store, run.id, {
+        objectStore: analysisObjectStore,
+        leaseOwner: `cloud-task:${taskName}`,
+      });
+      res.json({ runId: run.id, status: completed.status });
+    },
+  );
+
   app.use('/v1', authenticateRequest());
   app.use('/v1', async (_req, _res, next) => {
     try {
@@ -531,12 +710,14 @@ export function buildApp() {
   app.use('/v1/manifests', rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: true, legacyHeaders: false }));
 
   app.get('/api/health', (_req, res) => {
+    const deployment = publicDeploymentCapabilities();
     res.json({
       status: 'ok',
       version: '0.3.0',
+      deployment,
       authMode: authMode(),
-      database: postgresConfigured() ? 'postgresql-configured' : 'json-development',
-      adkConfigured: Boolean(process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY),
+      database: deployment.database,
+      adkConfigured: guardianModelConfigured(),
       model: process.env.LABLINEAGE_MODEL || 'gemini-2.5-flash'
     });
   });
@@ -544,7 +725,7 @@ export function buildApp() {
   app.get('/api/ready', async (_req, res) => {
     try {
       if (typeof store.refresh === 'function') await store.refresh();
-      res.json({ status: 'ready', database: postgresConfigured() ? 'postgresql' : 'json-development' });
+      res.json({ status: 'ready', deployment: publicDeploymentCapabilities() });
     } catch (error) {
       structuredLog('error', 'readiness_failed', { error: error.message });
       res.status(503).json({ status: 'not_ready' });
@@ -605,6 +786,7 @@ export function buildApp() {
   });
 
   app.get('/v1/integrations/status', (_req, res) => {
+    const deployment = publicDeploymentCapabilities();
     res.json({
       github: { configured: Boolean(process.env.GITHUB_TOKEN || (process.env.GITHUB_APP_ID && process.env.GITHUB_APP_INSTALLATION_ID && process.env.GITHUB_APP_PRIVATE_KEY)), mode: 'read-only' },
       workspace: {
@@ -622,31 +804,40 @@ export function buildApp() {
         trustedKeys: (process.env.LABLINEAGE_TRUSTED_COLLECTOR_KEYS || '').split(',').filter(Boolean).length
       },
       objectStorage: {
-        mode: process.env.LABLINEAGE_OBJECT_STORE || (process.env.NODE_ENV === 'production' ? 'gcs' : 'local'),
-        configured: process.env.NODE_ENV !== 'production' || Boolean(process.env.LABLINEAGE_GCS_BUCKET),
+        mode: deployment.objectStorage,
+        configured: deployment.objectStorage === 'local' || Boolean(process.env.LABLINEAGE_GCS_BUCKET),
         immutableWrites: true
-      }
+      },
+      deployment
     });
   });
 
   app.get('/v1/capabilities', (req, res) => {
+    const deployment = publicDeploymentCapabilities();
     const oidcReady = authMode() === 'oidc' && Boolean(
       process.env.LABLINEAGE_OIDC_ISSUER &&
       process.env.LABLINEAGE_OIDC_AUDIENCE &&
       process.env.LABLINEAGE_OIDC_JWKS_URL
     );
+    const queueReady = deployment.taskDispatcher === 'inline' || Boolean(
+      process.env.LABLINEAGE_TASKS_QUEUE && process.env.LABLINEAGE_TASKS_LOCATION &&
+      process.env.LABLINEAGE_ANALYSIS_WORKER_URL && process.env.LABLINEAGE_TASKS_AUDIENCE &&
+      process.env.LABLINEAGE_TASKS_SERVICE_ACCOUNT
+    );
     res.json({
       actor: { subject: req.actor.subject, kind: req.actor.kind, roles: req.actor.roles },
       capabilities: [
         { id: 'api', title: 'Guardian API', state: 'ready', detail: 'Evidence, lineage, audit, agent and handoff routes are running.' },
-        { id: 'postgres', title: 'PostgreSQL evidence store', state: postgresConfigured() ? 'configured' : 'not_configured', detail: postgresConfigured() ? 'DATABASE_URL is configured; run migrations before production use.' : 'Local JSON development store is active.' },
+        { id: 'deployment', title: 'Deployment profile', state: deployment.explicit ? 'configured' : 'development', detail: `${deployment.mode}: ${deployment.database}, ${deployment.objectStorage}, ${deployment.taskDispatcher}.` },
+        { id: 'postgres', title: 'PostgreSQL evidence store', state: postgresConfigured() ? 'configured' : deployment.mode === 'local' ? 'optional' : 'not_configured', detail: postgresConfigured() ? 'DATABASE_URL is configured; run migrations before production use.' : 'Local JSON store is active.' },
         { id: 'auth', title: 'OIDC and project RBAC', state: oidcReady ? 'configured' : authMode() === 'development' ? 'development' : 'not_configured', detail: `Authentication mode: ${authMode()}.` },
         { id: 'collector', title: 'Signed Edge Collector', state: 'ready', detail: 'CLI, SQLite incremental index, static parsers, path tokens and Ed25519 bundles are implemented.' },
         { id: 'github', title: 'GitHub read-only connector', state: (process.env.GITHUB_TOKEN || (process.env.GITHUB_APP_ID && process.env.GITHUB_APP_INSTALLATION_ID && process.env.GITHUB_APP_PRIVATE_KEY)) ? 'configured' : 'not_configured', detail: 'Uses a read-only GitHub App installation token or GITHUB_TOKEN.' },
         { id: 'workspace', title: 'Google Workspace handoff', state: ((process.env.GOOGLE_WORKSPACE_ACCESS_TOKEN || (process.env.GOOGLE_WORKSPACE_CLIENT_ID && process.env.GOOGLE_WORKSPACE_CLIENT_SECRET && process.env.GOOGLE_WORKSPACE_REFRESH_TOKEN)) && process.env.GOOGLE_DRIVE_FOLDER_ID && process.env.GOOGLE_SHEETS_SPREADSHEET_ID) ? 'configured' : 'not_configured', detail: 'Drive report, idempotent Sheets row and Gmail draft only.' },
-        { id: 'object-storage', title: 'Immutable report object storage', state: process.env.NODE_ENV !== 'production' ? 'development' : process.env.LABLINEAGE_GCS_BUCKET ? 'configured' : 'not_configured', detail: process.env.NODE_ENV !== 'production' ? 'Atomic local object store is active.' : 'Google Cloud Storage with generation preconditions is required.' },
-        { id: 'adk', title: 'Google ADK Guardian Agent', state: (process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY) ? 'configured' : 'not_configured', detail: `Model: ${process.env.LABLINEAGE_MODEL || 'gemini-2.5-flash'}.` },
-        { id: 'runtime', title: 'Runtime / Registry / Gateway', state: 'not_configured', detail: 'Cloud deployment and registry validation are still required.' }
+        { id: 'object-storage', title: 'Immutable report object storage', state: deployment.objectStorage === 'local' ? 'configured' : process.env.LABLINEAGE_GCS_BUCKET ? 'configured' : 'not_configured', detail: deployment.objectStorage === 'local' ? 'Atomic local object store is active.' : 'Google Cloud Storage with generation preconditions is active.' },
+        { id: 'analysis-queue', title: 'Automatic analysis dispatcher', state: queueReady ? 'configured' : 'not_configured', detail: deployment.taskDispatcher === 'inline' ? 'Durable runs use the local inline worker with lease recovery.' : 'Cloud Tasks invokes the private worker with OIDC.' },
+        { id: 'adk', title: 'Google ADK Guardian Agent', state: guardianModelConfigured() ? 'configured' : 'not_configured', detail: `Model: ${process.env.LABLINEAGE_MODEL || 'gemini-2.5-flash'}.` },
+        { id: 'runtime', title: 'Runtime / Registry / Gateway', state: deployment.mode === 'google_cloud' ? 'configured' : 'development', detail: deployment.mode === 'google_cloud' ? 'Google Cloud production profile is active.' : 'Local workstation profile is active.' }
       ]
     });
   });
@@ -676,10 +867,7 @@ export function buildApp() {
     res.json(visible.map((project) => projectSummary(store.get(), project.id)));
   });
   app.post('/v1/projects', authorizeRole('admin'), requireIdempotentWrite, async (req, res) => {
-    const input = z.object({
-      name: z.string().min(1).max(120),
-      slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(120).optional()
-    }).parse(req.body);
+    const input = createProjectSchema.parse(req.body);
     const slug = input.slug || input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     if (!slug) return res.status(400).json({ error: 'Project name must produce a non-empty slug' });
     if (store.get().projects.some((item) => item.slug === slug)) {
@@ -693,19 +881,309 @@ export function buildApp() {
       updatedAt: new Date().toISOString()
     };
     await store.update((state) => {
+      if (state.projects.some((item) => item.slug === slug)) {
+        throw Object.assign(new Error('Project slug already exists'), { statusCode: 409 });
+      }
       state.evidence ||= [];
       state.projects.push(project);
       state.nodes.push({ id: project.id, projectId: project.id, type: 'Project', label: project.name, status: 'accepted', humanConfirmed: true, evidenceIds: [] });
+      appendProjectIntent(state, {
+        projectId: project.id,
+        objective: input.objective,
+        successCriteria: input.successCriteria,
+        keyOutputs: input.keyOutputs,
+        constraints: input.constraints,
+        actorSubject: req.actor.subject,
+        version: 1,
+        now: project.createdAt
+      });
     });
     await store.log({ action: 'create_project', actor: req.actor.subject, resource: `project/${project.id}`, details: `Created project ${project.slug}.` });
-    res.status(201).json(project);
+    res.status(201).json(projectDetail(store.get(), project.id));
   });
+
+  app.get('/v1/projects/:projectId', requireProject, (req, res) => {
+    res.json(projectDetail(store.get(), req.params.projectId));
+  });
+
+  app.post('/v1/projects/:projectId/intent-versions', requireProject, authorizeRole('editor'), requireIdempotentWrite, async (req, res) => {
+    const input = createIntentVersionSchema.parse(req.body);
+    let intent;
+    try {
+      await store.update((state) => {
+        intent = appendNextProjectIntent(state, req.params.projectId, input, req.actor.subject);
+      });
+    } catch (error) {
+      if (error instanceof IntentVersionConflictError) {
+        return res.status(409).json({ error: error.message });
+      }
+      throw error;
+    }
+    await store.log({
+      action: 'create_project_intent_version',
+      actor: req.actor.subject,
+      resource: `project/${req.params.projectId}`,
+      details: `Created project intent version ${intent.version}.`
+    });
+    res.status(201).json(intent);
+  });
+
+  app.get('/v1/projects/:projectId/collectors', requireProject, (req, res) => {
+    const pairings = (store.get().collectorPairings || [])
+      .filter((item) => item.projectId === req.params.projectId)
+      .map(publicCollectorPairing);
+    const collectors = (store.get().collectorCredentials || [])
+      .filter((item) => item.projectId === req.params.projectId)
+      .map(publicCollectorCredential);
+    res.json({ pairings, collectors });
+  });
+
+  app.post(
+    '/v1/projects/:projectId/collector-pairings',
+    requireProject,
+    authorizeRole('editor'),
+    requireIdempotentWrite,
+    async (req, res) => {
+      const input = z.object({ expiresInSeconds: z.number().int().min(60).max(900).default(600) }).strict().parse(req.body || {});
+      let created;
+      await store.update((state) => {
+        created = createCollectorPairing(state, {
+          projectId: req.params.projectId,
+          actorSubject: req.actor.subject,
+          expiresInMs: input.expiresInSeconds * 1000,
+        });
+      });
+      await store.log({
+        action: 'create_collector_pairing',
+        actor: req.actor.subject,
+        resource: `project/${req.params.projectId}/pairing/${created.pairing.id}`,
+        details: `Created collector pairing expiring at ${created.pairing.expiresAt}.`,
+      });
+      res.status(201).json({ ...created.pairing, code: created.code });
+    },
+  );
+
+  app.post(
+    '/v1/projects/:projectId/collectors/:collectorId/revoke',
+    requireProject,
+    authorizeRole('admin'),
+    requireIdempotentWrite,
+    async (req, res) => {
+      z.object({ confirmation: z.literal('REVOKE_COLLECTOR') }).strict().parse(req.body);
+      const candidate = (store.get().collectorCredentials || []).find((item) => item.collectorId === req.params.collectorId);
+      if (!candidate || candidate.projectId !== req.params.projectId) return res.status(404).json({ error: 'Collector not found' });
+      let collector;
+      await store.update((state) => {
+        collector = revokeCollectorCredential(state, {
+          collectorId: req.params.collectorId,
+          actorSubject: req.actor.subject,
+        });
+      });
+      await store.log({
+        action: 'revoke_collector',
+        actor: req.actor.subject,
+        resource: `project/${req.params.projectId}/collector/${req.params.collectorId}`,
+        details: 'Revoked collector access and disconnected its source.',
+      });
+      res.json(collector);
+    },
+  );
+
+  app.get('/v1/projects/:projectId/analysis-runs', requireProject, (req, res) => {
+    const runs = (store.get().analysisRuns || [])
+      .filter((run) => run.projectId === req.params.projectId)
+      .sort((left, right) => Date.parse(right.createdAt || right.queuedAt) - Date.parse(left.createdAt || left.queuedAt))
+      .map((run) => publicAnalysisRun(store.get(), run.id));
+    res.json({ runs });
+  });
+
+  app.get('/v1/projects/:projectId/analysis-runs/:runId', requireProject, (req, res) => {
+    const run = (store.get().analysisRuns || []).find((item) => item.id === req.params.runId);
+    if (!run || run.projectId !== req.params.projectId) return res.status(404).json({ error: 'Analysis run not found' });
+    res.json(publicAnalysisRun(store.get(), run.id));
+  });
+
+  app.post('/v1/projects/:projectId/analysis-runs/:runId/retry', requireProject, authorizeRole('editor'), requireIdempotentWrite, async (req, res) => {
+    const input = z.object({
+      expectedVersion: z.number().int().min(1),
+      confirmation: z.literal('RETRY_ANALYSIS_RUN'),
+    }).strict().parse(req.body);
+    const candidate = (store.get().analysisRuns || []).find((item) => item.id === req.params.runId);
+    if (!candidate || candidate.projectId !== req.params.projectId) return res.status(404).json({ error: 'Analysis run not found' });
+    let run;
+    await store.update((state) => {
+      run = retryAnalysisRun(state, {
+        runId: req.params.runId,
+        expectedVersion: input.expectedVersion,
+        actorSubject: req.actor.subject,
+      });
+    });
+    await store.log({
+      action: 'retry_analysis_run',
+      actor: req.actor.subject,
+      resource: `project/${req.params.projectId}/analysis-run/${run.id}`,
+      details: `Retried analysis from ${run.currentStep}.`,
+    });
+    await analysisDispatcher.dispatch(run.id);
+    res.status(202).json(publicAnalysisRun(store.get(), run.id));
+  });
+
+  app.post('/v1/projects/:projectId/analysis-runs/:runId/cancel', requireProject, authorizeRole('editor'), requireIdempotentWrite, async (req, res) => {
+    const input = z.object({
+      expectedVersion: z.number().int().min(1),
+      confirmation: z.literal('CANCEL_ANALYSIS_RUN'),
+    }).strict().parse(req.body);
+    const candidate = (store.get().analysisRuns || []).find((item) => item.id === req.params.runId);
+    if (!candidate || candidate.projectId !== req.params.projectId) return res.status(404).json({ error: 'Analysis run not found' });
+    let run;
+    await store.update((state) => {
+      run = cancelAnalysisRun(state, {
+        runId: req.params.runId,
+        expectedVersion: input.expectedVersion,
+        actorSubject: req.actor.subject,
+      });
+    });
+    await store.log({
+      action: 'cancel_analysis_run',
+      actor: req.actor.subject,
+      resource: `project/${req.params.projectId}/analysis-run/${run.id}`,
+      details: 'Cancelled pending analysis work.',
+    });
+    res.status(202).json(publicAnalysisRun(store.get(), run.id));
+  });
+
+  app.get('/v1/projects/:projectId/analysis-runs/:runId/report', requireProject, async (req, res) => {
+    const run = (store.get().analysisRuns || []).find((item) => item.id === req.params.runId);
+    if (!run || run.projectId !== req.params.projectId) return res.status(404).json({ error: 'Analysis run not found' });
+    const report = (store.get().analysisReports || []).find((item) => item.runId === run.id);
+    if (!report) return res.status(404).json({ error: 'Analysis report not found' });
+    let document = report.document;
+    if (!document && report.objectKey) {
+      const storedObject = await createObjectStore({ dataDir: store.dataDir }).get(report.objectKey);
+      if (storedObject.sha256 !== report.sha256) throw new Error('Analysis report object checksum mismatch');
+      document = JSON.parse(storedObject.content.toString('utf8'));
+    }
+    const { objectKey: _objectKey, storageUri: _storageUri, document: _document, ...metadata } = report;
+    res.json({ ...metadata, document });
+  });
+
+  app.post(
+    '/v1/projects/:projectId/sources/github',
+    requireProject,
+    authorizeRole('editor'),
+    requireIdempotentWrite,
+    async (req, res) => {
+      const input = z.object({
+        repository: z.string().trim().min(3).max(300),
+        branch: z.string().trim().min(1).max(250).optional(),
+      }).strict().parse(req.body);
+      const { owner, repo } = parseGitHubRepository(input.repository);
+      const client = await githubClientFactory();
+      let evidence;
+      try {
+        evidence = await client.collectRepository(owner, repo, { branch: input.branch, limit: 100 });
+      } catch (error) {
+        if (error?.name === 'TimeoutError' || error?.code === 'ETIMEDOUT' || error?.code === 'ABORT_ERR') {
+          error.statusCode = 504;
+        }
+        throw error;
+      }
+      evidence.capturedAt = new Date().toISOString();
+      const sourceRevision = evidence.repositorySnapshot?.headSha;
+      if (!sourceRevision) throw Object.assign(new Error('GitHub did not return an immutable head revision'), { statusCode: 502 });
+      let archive;
+      try {
+        archive = await client.downloadRepositoryArchive(owner, repo, sourceRevision);
+      } catch (error) {
+        if (error?.name === 'TimeoutError' || error?.code === 'ETIMEDOUT' || error?.code === 'ABORT_ERR') error.statusCode = 504;
+        throw error;
+      }
+      const archiveSha256 = createHash('sha256').update(archive.content).digest('hex');
+      const archiveObjectKey = `analysis-inputs/${req.params.projectId}/github/${sourceRevision}/${archiveSha256}.zip`;
+      await analysisObjectStore.putImmutable({
+        key: archiveObjectKey,
+        content: archive.content,
+        contentType: 'application/zip',
+        metadata: { projectId: req.params.projectId, provider: 'github', sourceRevision },
+      });
+      const content = Buffer.from(`${JSON.stringify({
+        schemaVersion: 'lablineage.github-analysis-input.v1',
+        evidence,
+        archive: { objectKey: archiveObjectKey, sha256: archiveSha256, sizeBytes: archive.sizeBytes },
+      })}\n`);
+      const digest = createHash('sha256').update(content).digest('hex');
+      const objectKey = `analysis-inputs/${req.params.projectId}/github/${sourceRevision}/${digest}.json`;
+      await analysisObjectStore.putImmutable({
+        key: objectKey,
+        content,
+        contentType: 'application/json',
+        metadata: { projectId: req.params.projectId, provider: 'github', sourceRevision },
+      });
+      const now = evidence.capturedAt;
+      const idempotencyKey = req.get('Idempotency-Key');
+      let source;
+      let created;
+      await store.update((state) => {
+        source = (state.sources || []).find((item) => (
+          item.projectId === req.params.projectId
+          && item.type === 'github'
+          && item.repositoryFullName?.toLowerCase() === evidence.repository.fullName.toLowerCase()
+          && item.branch === (input.branch || evidence.repository.defaultBranch)
+          && item.status === 'active'
+        ));
+        if (!source) {
+          source = {
+            id: `src_${randomUUID()}`,
+            projectId: req.params.projectId,
+            name: evidence.repository.fullName,
+            type: 'github',
+            provider: 'github_app',
+            networkMode: 'cloud_pull',
+            status: 'active',
+            repositoryFullName: evidence.repository.fullName,
+            repositoryUrl: evidence.repository.htmlUrl,
+            branch: input.branch || evidence.repository.defaultBranch,
+            accessPolicy: { contents: 'read', metadata: 'read', actions: 'read', pullRequests: 'read', writes: false },
+            createdAt: now,
+            updatedAt: now,
+          };
+          state.sources ||= [];
+          state.sources.push(source);
+        } else {
+          source.updatedAt = now;
+        }
+        created = createAnalysisRun(state, {
+          projectId: req.params.projectId,
+          sourceId: source.id,
+          sourceRevision,
+          inputKind: 'github',
+          inputObjectKey: objectKey,
+          inputSha256: digest,
+          idempotencyKey,
+          actorSubject: req.actor.subject,
+        });
+      });
+      await store.log({
+        action: 'connect_github_source',
+        actor: req.actor.subject,
+        resource: `project/${req.params.projectId}/source/${source.id}`,
+        details: `Queued read-only analysis for ${evidence.repository.fullName} at immutable revision ${sourceRevision}.`,
+      });
+      await analysisDispatcher.dispatch(created.run.id);
+      res.status(202).location(`/v1/projects/${req.params.projectId}/analysis-runs/${created.run.id}`).json({
+        sourceId: source.id,
+        runId: created.run.id,
+        statusUrl: `/v1/projects/${req.params.projectId}/analysis-runs/${created.run.id}`,
+        idempotent: created.idempotent,
+      });
+    },
+  );
 
   app.get('/v1/projects/:projectId/sources', requireProject, (req, res) => {
     res.json((store.get().sources || []).filter((source) => source.projectId === req.params.projectId));
   });
 
-  app.post('/v1/projects/:projectId/sources', requireProject, requireIdempotentWrite, async (req, res) => {
+  app.post('/v1/projects/:projectId/sources', requireProject, authorizeRole('editor'), requireIdempotentWrite, async (req, res) => {
     const input = z.object({
       name: z.string().min(1).max(160),
       type: z.enum(['filesystem', 'github', 'google_drive', 'offline_bundle']),
@@ -1054,7 +1532,7 @@ export function buildApp() {
     res.status(201).json(proposal);
   });
 
-  app.post('/v1/projects/:projectId/lineage-proposals', requireProject, requireIdempotentWrite, async (req, res) => {
+  app.post('/v1/projects/:projectId/lineage-proposals', requireProject, authorizeRole('editor'), requireIdempotentWrite, async (req, res) => {
     const input = z.object({
       nodes: z.array(z.object({
         pathToken: z.string().min(1),
@@ -1144,7 +1622,7 @@ export function buildApp() {
       (finding.projectId === req.params.projectId || finding.affectedEntities.some((id) => ids.has(id)))
     )));
   });
-  app.post('/v1/projects/:projectId/findings/:findingId/resolve', requireProject, requireIdempotentWrite, async (req, res) => {
+  app.post('/v1/projects/:projectId/findings/:findingId/resolve', requireProject, authorizeRole('auditor'), requireIdempotentWrite, async (req, res) => {
     const input = z.object({
       confirmation: z.literal('RESOLVE_FINDING'),
       note: z.string().trim().max(1000).optional()
@@ -1675,7 +2153,7 @@ export function buildApp() {
     res.json(store.get().auditEvents.filter((event) => event.resource === `project/${req.params.projectId}` || event.resource?.startsWith(`project/${req.params.projectId}/`)));
   });
 
-  app.post('/v1/projects/:projectId/nodes/:nodeId/confirm', requireProject, requireIdempotentWrite, async (req, res) => {
+  app.post('/v1/projects/:projectId/nodes/:nodeId/confirm', requireProject, authorizeRole('auditor'), requireIdempotentWrite, async (req, res) => {
     let found = false;
     await store.update((state) => {
       const node = state.nodes.find((item) => item.id === req.params.nodeId);
@@ -1690,7 +2168,7 @@ export function buildApp() {
     res.status(204).end();
   });
 
-  app.post('/v1/projects/:projectId/snapshots', requireProject, requireIdempotentWrite, async (req, res) => {
+  app.post('/v1/projects/:projectId/snapshots', requireProject, authorizeRole('editor'), requireIdempotentWrite, async (req, res) => {
     const input = z.object({
       path: z.string().min(1),
       includeTextDiff: z.boolean().default(false),
@@ -1712,26 +2190,52 @@ export function buildApp() {
     await store.log({ action: 'scan_directory', actor: req.actor.subject, resource: `project/${req.params.projectId}`, details: `Captured ${snapshot.fileCount} files; ${changes.length} changes.` });
     res.status(201).json({ snapshot: snapshotSummaryForApi(snapshot), changes });
   });
-  app.post('/v1/projects/:projectId/archives', requireProject, uploadArchiveMiddleware, requireIdempotentWrite, async (req, res) => {
+  app.post('/v1/projects/:projectId/archives', requireProject, authorizeRole('editor'), uploadArchiveMiddleware, requireIdempotentWrite, async (req, res) => {
     try {
-      const extracted = await extractArchive(req.upload.zipPath, req.upload.tempDir);
-      const snapshot = await scanDirectory(extracted.destDir, {
-        allowedRoot: extracted.destDir,
-        includeTextContent: true
+      // Validate the full central directory before accepting the immutable input.
+      await extractArchive(req.upload.zipPath, req.upload.tempDir);
+      const content = await readFile(req.upload.zipPath);
+      const objectKey = `analysis-inputs/${req.params.projectId}/zip/${req.upload.sha256}.zip`;
+      await analysisObjectStore.putImmutable({
+        key: objectKey,
+        content,
+        contentType: 'application/zip',
+        metadata: { projectId: req.params.projectId, sourceRevision: req.upload.sha256 },
       });
-      const changes = await persistSnapshot(req.params.projectId, snapshot);
-      await store.log({ action: 'scan_upload', actor: req.actor.subject, resource: `project/${req.params.projectId}`, details: `Captured ${snapshot.fileCount} files from ${req.upload.filename}; ${changes.length} changes.` });
-      res.status(201).json({
-        snapshot: snapshotSummaryForApi(snapshot),
-        changes,
-        upload: {
-          filename: req.upload.filename,
-          sha256: req.upload.sha256,
-          sizeBytes: req.upload.sizeBytes,
-          extractedFiles: extracted.extractedFiles,
-          extractedBytes: extracted.extractedBytes,
-          warnings: extracted.warnings
-        }
+      const now = new Date().toISOString();
+      const source = {
+        id: `src_${randomUUID()}`,
+        projectId: req.params.projectId,
+        name: req.upload.filename.slice(0, 160),
+        type: 'offline_bundle',
+        networkMode: 'one_time_upload',
+        status: 'active',
+        exportPolicy: { rawFileContent: false, rawPaths: false, signedBundlesRequired: false },
+        createdAt: now,
+        updatedAt: now,
+      };
+      let created;
+      await store.update((state) => {
+        state.sources ||= [];
+        state.sources.push(source);
+        created = createAnalysisRun(state, {
+          projectId: req.params.projectId,
+          sourceId: source.id,
+          sourceRevision: req.upload.sha256,
+          inputKind: 'zip',
+          inputObjectKey: objectKey,
+          inputSha256: req.upload.sha256,
+          idempotencyKey: req.get('Idempotency-Key'),
+          actorSubject: req.actor.subject,
+        });
+      });
+      await store.log({ action: 'queue_zip_analysis', actor: req.actor.subject, resource: `project/${req.params.projectId}/source/${source.id}`, details: `Queued one-time ZIP analysis for ${req.upload.filename} (${req.upload.sizeBytes} bytes).` });
+      await analysisDispatcher.dispatch(created.run.id);
+      res.status(202).location(`/v1/projects/${req.params.projectId}/analysis-runs/${created.run.id}`).json({
+        sourceId: source.id,
+        runId: created.run.id,
+        statusUrl: `/v1/projects/${req.params.projectId}/analysis-runs/${created.run.id}`,
+        idempotent: created.idempotent,
       });
     } finally {
       await rm(req.upload.tempDir, { recursive: true, force: true }).catch(() => {});
@@ -1791,7 +2295,7 @@ export function buildApp() {
     res.status(207).json({ accepted, rejected: results.length - accepted, results });
   });
 
-  app.post('/v1/projects/:projectId/audits', requireProject, requireIdempotentWrite, async (req, res) => {
+  app.post('/v1/projects/:projectId/audits', requireProject, authorizeRole('editor'), requireIdempotentWrite, async (req, res) => {
     const graph = projectGraph(store.get(), req.params.projectId);
     const audit = createAudit(req.params.projectId, graph.nodes, graph.edges);
     await store.update((state) => {
@@ -1820,7 +2324,7 @@ export function buildApp() {
     res.status(201).json(audit);
   });
 
-  app.post('/v1/projects/:projectId/github/sync', requireProject, requireIdempotentWrite, async (req, res) => {
+  app.post('/v1/projects/:projectId/github/sync', requireProject, authorizeRole('editor'), requireIdempotentWrite, async (req, res) => {
     const input = z.object({
       owner: z.string().min(1).max(100),
       repo: z.string().min(1).max(100),
@@ -1850,7 +2354,7 @@ export function buildApp() {
     });
   });
 
-  app.post('/v1/projects/:projectId/repositories/sync', requireProject, requireIdempotentWrite, async (req, res) => {
+  app.post('/v1/projects/:projectId/repositories/sync', requireProject, authorizeRole('editor'), requireIdempotentWrite, async (req, res) => {
     const input = z.discriminatedUnion('provider', [
       z.object({
         provider: z.literal('github'),
@@ -2295,10 +2799,14 @@ export function buildApp() {
 
 export const app = buildApp();
 if (path.resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
+  deploymentProfile(process.env, { requireExplicit: process.env.NODE_ENV === 'production' });
   const server = app.listen(port, host, () => {
     console.log(`LabLineage Guardian API listening on http://${host}:${port}`);
     void recoverIngestionJobs().catch((error) => {
       structuredLog('error', 'ingestion_recovery_failed', { error: error.message });
+    });
+    void analysisDispatcher.recover().catch((error) => {
+      structuredLog('error', 'analysis_recovery_failed', { error: error.message });
     });
   });
   let shuttingDown = false;
@@ -2310,6 +2818,7 @@ if (path.resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
     forcedExit.unref();
     await new Promise((resolve) => server.close(resolve));
     await Promise.allSettled([...ingestionExecutions.values()]);
+    await analysisDispatcher.close();
     if (typeof store.close === 'function') await store.close();
     if (globalThis.__lablineageTelemetry?.shutdown) await globalThis.__lablineageTelemetry.shutdown();
     clearTimeout(forcedExit);

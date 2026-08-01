@@ -7,7 +7,7 @@ import test from 'node:test';
 import AdmZip from 'adm-zip';
 import { app, store } from '../server.js';
 import { makeDemoState } from '../lib/store.js';
-import { resolveSafeEntry } from '../lib/upload.js';
+import { resolveSafeEntry, UPLOAD_LIMITS, validateArchiveEntries } from '../lib/upload.js';
 
 const PROJECT_ID = 'project_phase_transition';
 
@@ -138,7 +138,17 @@ async function postArchive(base, { zipBuffer, filename = 'project.zip', idempote
   });
 }
 
-test('upload archive scans a zip and persists a project snapshot', async () => {
+async function waitForRun(base, runId) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const response = await fetch(`${base}/v1/projects/${PROJECT_ID}/analysis-runs/${runId}`);
+    const run = await response.json();
+    if (['completed', 'partial', 'failed', 'cancelled'].includes(run.status)) return run;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Analysis run ${runId} did not reach a terminal state`);
+}
+
+test('upload archive queues durable automatic analysis and persists a project snapshot', async () => {
   await withServer(async (base) => {
     await withIsolatedStore(async () => {
       const zipBuffer = zipWith([
@@ -147,24 +157,22 @@ test('upload archive scans a zip and persists a project snapshot', async () => {
         ['output/fig3.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3])]
       ]);
       const response = await postArchive(base, { zipBuffer });
-      assert.equal(response.status, 201);
+      assert.equal(response.status, 202);
       const body = await response.json();
-      assert.equal(body.snapshot.fileCount, 3);
-      assert.equal(body.upload.filename, 'project.zip');
-      assert.equal(body.upload.sha256.length, 64);
-      assert.equal(body.upload.extractedFiles, 3);
-      assert.equal(body.upload.warnings.length, 0);
-      assert.equal(body.snapshot.projectId, PROJECT_ID);
-      assert.ok(body.snapshot.directoryRootHash.startsWith('sha256:'));
-      assert.equal(body.changes.length, 3);
-      assert.deepEqual(body.changes.map((change) => change.type), ['added', 'added', 'added']);
+      assert.ok(body.sourceId);
+      assert.ok(body.runId);
+      assert.equal(body.statusUrl, `/v1/projects/${PROJECT_ID}/analysis-runs/${body.runId}`);
+      const run = await waitForRun(base, body.runId);
+      assert.equal(run.status, 'partial');
+      assert.ok(run.report);
       // 快照已入库且可列出
       const list = await fetch(`${base}/v1/projects/${PROJECT_ID}/snapshots`).then((r) => r.json());
       assert.equal(list.length, 1);
-      assert.equal(list[0].id, body.snapshot.id);
+      assert.equal(list[0].fileCount, 3);
+      assert.ok(list[0].directoryRootHash.startsWith('sha256:'));
       // 审计日志记录 scan_upload
       const audits = await fetch(`${base}/v1/projects/${PROJECT_ID}/audit-events`).then((r) => r.json());
-      assert.ok(audits.some((event) => event.action === 'scan_upload'));
+      assert.ok(audits.some((event) => event.action === 'queue_zip_analysis'));
     });
   });
 });
@@ -223,6 +231,41 @@ test('resolveSafeEntry rejects traversal, absolute and backslash-obfuscated name
   assert.equal(resolveSafeEntry(destDir, 'safe/ok.txt'), path.join(destDir, 'safe', 'ok.txt'));
 });
 
+test('archive metadata rejects symbolic links, compression bombs and excessive expanded totals before extraction', () => {
+  const entry = ({ name, size, compressedSize, attr = 0 }) => ({
+    entryName: name,
+    isDirectory: false,
+    attr,
+    header: { size, compressedSize }
+  });
+  assert.throws(
+    () => validateArchiveEntries([entry({
+      name: 'escape-link',
+      size: 8,
+      compressedSize: 8,
+      attr: 0xa000 << 16
+    })]),
+    (error) => error.statusCode === 422 && /symbolic link/u.test(error.message)
+  );
+  assert.throws(
+    () => validateArchiveEntries([entry({
+      name: 'compression-bomb.bin',
+      size: 2 * 1024 * 1024,
+      compressedSize: 1
+    })]),
+    (error) => error.statusCode === 422 && /compression ratio/u.test(error.message)
+  );
+  const oversizedTotal = Array.from({ length: 5 }, (_, index) => entry({
+    name: `part-${index}.bin`,
+    size: UPLOAD_LIMITS.maxSingleFileBytes,
+    compressedSize: UPLOAD_LIMITS.maxSingleFileBytes
+  }));
+  assert.throws(
+    () => validateArchiveEntries(oversizedTotal),
+    (error) => error.statusCode === 413 && /Extracted archive/u.test(error.message)
+  );
+});
+
 test('upload archive rejects ../ traversal entries in a crafted archive', async () => {
   await withServer(async (base) => {
     await withIsolatedStore(async () => {
@@ -232,13 +275,14 @@ test('upload archive rejects ../ traversal entries in a crafted archive', async 
         { name: '/absolute/abs.txt', data: Buffer.from('rejected') }
       ]);
       const response = await postArchive(base, { zipBuffer });
-      assert.equal(response.status, 201);
+      assert.equal(response.status, 202);
       const body = await response.json();
-      assert.equal(body.snapshot.fileCount, 1);
-      assert.equal(body.upload.extractedFiles, 1);
-      assert.equal(body.upload.warnings.length, 2);
-      assert.ok(body.upload.warnings.some((warning) => warning.includes('../evil.txt')));
-      assert.ok(body.upload.warnings.some((warning) => warning.includes('/absolute/abs.txt')));
+      await waitForRun(base, body.runId);
+      const snapshots = await fetch(`${base}/v1/projects/${PROJECT_ID}/snapshots`).then((r) => r.json());
+      assert.equal(snapshots.at(-1).fileCount, 1);
+      assert.equal(snapshots.at(-1).warnings.length, 2);
+      assert.ok(snapshots.at(-1).warnings.some((warning) => warning.includes('../evil.txt')));
+      assert.ok(snapshots.at(-1).warnings.some((warning) => warning.includes('/absolute/abs.txt')));
     });
   });
 });
@@ -270,15 +314,15 @@ test('upload archive is idempotent per Idempotency-Key', async () => {
       const key = randomUUID();
       const zipBuffer = zipWith([['once.txt', 'only once']]);
       const first = await postArchive(base, { zipBuffer, idempotencyKey: key });
-      assert.equal(first.status, 201);
+      assert.equal(first.status, 202);
       const firstBody = await first.json();
       const replay = await postArchive(base, { zipBuffer, idempotencyKey: key });
-      assert.equal(replay.status, 201);
+      assert.equal(replay.status, 202);
       assert.equal(replay.headers.get('idempotency-replayed'), 'true');
       const replayBody = await replay.json();
-      assert.equal(replayBody.snapshot.id, firstBody.snapshot.id);
-      const list = await fetch(`${base}/v1/projects/${PROJECT_ID}/snapshots`).then((r) => r.json());
-      assert.equal(list.length, 1);
+      assert.equal(replayBody.runId, firstBody.runId);
+      const runs = await fetch(`${base}/v1/projects/${PROJECT_ID}/analysis-runs`).then((r) => r.json());
+      assert.equal(runs.runs.filter((run) => run.id === firstBody.runId).length, 1);
     });
   });
 });

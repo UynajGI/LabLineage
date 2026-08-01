@@ -121,6 +121,8 @@ test('security headers, RBAC and project isolation are enforced over HTTP', asyn
       const metricsText = await metrics.text();
       assert.match(metricsText, /lablineage_http_requests_total/);
       assert.match(metricsText, /lablineage_ingestion_jobs\{status="queued"\}/);
+      assert.match(metricsText, /lablineage_analysis_runs\{status="queued"\}/);
+      assert.match(metricsText, /lablineage_analysis_steps\{name="ingest",status="pending"\}/);
 
       const bundleId = `batch-${Date.now()}`;
       const validManifest = {

@@ -15,7 +15,8 @@ export const UPLOAD_LIMITS = {
   // 解压条目数上限（与扫描器 maxFiles 对齐）
   maxEntries: 10_000,
   // 单个解压文件上限（与扫描器 maxBytes 对齐）
-  maxSingleFileBytes: 50 * 1024 * 1024
+  maxSingleFileBytes: 50 * 1024 * 1024,
+  maxCompressionRatio: 1_000
 };
 
 function httpError(statusCode, message) {
@@ -46,6 +47,39 @@ export function resolveSafeEntry(destDir, entryName) {
   const target = path.resolve(destRoot, ...parts);
   if (target !== destRoot && !target.startsWith(destRoot + path.sep)) return null;
   return target;
+}
+
+/**
+ * Validate central-directory metadata before any entry is decompressed.
+ * Kept separate so the resource limits can be exercised without allocating
+ * attacker-controlled expanded payloads in tests.
+ */
+export function validateArchiveEntries(entries) {
+  if (entries.length === 0) throw httpError(400, 'Archive is empty');
+  if (entries.length > UPLOAD_LIMITS.maxEntries) {
+    throw httpError(413, `Archive exceeds ${UPLOAD_LIMITS.maxEntries} entries`);
+  }
+  let declaredExtractBytes = 0;
+  for (const entry of entries) {
+    if (entry.isDirectory) continue;
+    const mode = ((entry.attr || 0) >>> 16) & 0xf000;
+    if (mode === 0xa000) throw httpError(422, `Archive contains a symbolic link: ${entry.entryName}`);
+    const declaredSize = Number(entry.header?.size || 0);
+    const compressedSize = Number(entry.header?.compressedSize || 0);
+    if (!Number.isSafeInteger(declaredSize) || declaredSize < 0) throw httpError(422, 'Archive has an invalid entry size');
+    if (declaredSize > UPLOAD_LIMITS.maxSingleFileBytes) {
+      throw httpError(413, `Entry ${entry.entryName} exceeds ${UPLOAD_LIMITS.maxSingleFileBytes} bytes`);
+    }
+    if (declaredSize > 0 && compressedSize === 0) throw httpError(422, `Entry ${entry.entryName} has an invalid compression size`);
+    if (compressedSize > 0 && declaredSize / compressedSize > UPLOAD_LIMITS.maxCompressionRatio) {
+      throw httpError(422, `Entry ${entry.entryName} exceeds the compression ratio limit`);
+    }
+    declaredExtractBytes += declaredSize;
+    if (declaredExtractBytes > UPLOAD_LIMITS.maxExtractBytes) {
+      throw httpError(413, `Extracted archive exceeds ${UPLOAD_LIMITS.maxExtractBytes} bytes`);
+    }
+  }
+  return { declaredExtractBytes };
 }
 
 /**
@@ -129,10 +163,7 @@ export async function extractArchive(zipPath, tempDir) {
     throw httpError(415, 'Uploaded file is not a valid zip archive');
   }
   const entries = archive.getEntries();
-  if (entries.length === 0) throw httpError(400, 'Archive is empty');
-  if (entries.length > UPLOAD_LIMITS.maxEntries) {
-    throw httpError(413, `Archive exceeds ${UPLOAD_LIMITS.maxEntries} entries`);
-  }
+  validateArchiveEntries(entries);
   const destDir = path.join(tempDir, 'content');
   await mkdir(destDir, { recursive: true });
   let extractedBytes = 0;
@@ -146,6 +177,7 @@ export async function extractArchive(zipPath, tempDir) {
       continue;
     }
     const data = entry.getData();
+    if (Number(entry.header?.size || 0) !== data.length) throw httpError(422, `Entry ${entry.entryName} size does not match its header`);
     if (data.length > UPLOAD_LIMITS.maxSingleFileBytes) {
       throw httpError(413, `Entry ${entry.entryName} exceeds ${UPLOAD_LIMITS.maxSingleFileBytes} bytes`);
     }
