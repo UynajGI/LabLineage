@@ -105,6 +105,34 @@ test('PostgreSQL projection and RLS isolate a least-privilege runtime role', {
     );
     assert.equal(projected.rows[0].count, 1);
 
+    let resumeUpdate;
+    let updateEntered;
+    const entered = new Promise((resolve) => { updateEntered = resolve; });
+    const paused = new Promise((resolve) => { resumeUpdate = resolve; });
+    const concurrentUpdate = store.update(async (state) => {
+      updateEntered();
+      await paused;
+      state.projects.push({
+        id: 'project-concurrent-refresh',
+        slug: 'concurrent-refresh',
+        name: 'Concurrent refresh verification',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+    });
+    await entered;
+    let refreshFinished = false;
+    const concurrentRefresh = store.refresh().then(() => { refreshFinished = true; });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(refreshFinished, false, 'refresh must wait for the active state update');
+    } finally {
+      resumeUpdate();
+    }
+    await Promise.all([concurrentUpdate, concurrentRefresh]);
+    await store.refresh();
+    assert.equal(store.get().projects.some((project) => project.id === 'project-concurrent-refresh'), true);
+
     const sessions = new GuardianSessionService(store, 'project-projection');
     const conversation = await sessions.createConversation('postgres-actor', 'PostgreSQL session');
     const session = await sessions.getSession({

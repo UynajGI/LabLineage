@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { CloudTasksClient } from '@google-cloud/tasks';
 import { deploymentProfile } from './deployment-mode.js';
 import { executeAnalysisRun } from './analysis-pipeline.js';
+import { structuredLog } from './observability.js';
 import { ANALYSIS_TERMINAL_STATUSES } from './project-analysis.js';
 
 function taskId(runId, deliveryKey) {
@@ -25,7 +26,10 @@ class LocalAnalysisDispatcher {
       const execution = this.execute(this.store, runId, {
         objectStore: this.objectStore,
         leaseOwner: this.instanceId,
-      }).catch(() => null).finally(() => {
+      }).catch((error) => {
+        structuredLog('error', 'analysis_execution_failed', { runId, error: error.message });
+        return null;
+      }).finally(() => {
         this.executions.delete(runId);
         this.scheduleLeaseRecovery(runId);
       });

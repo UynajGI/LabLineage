@@ -67,8 +67,21 @@ export class PostgresStore {
     this.tenantSlug = tenantSlug || process.env.LABLINEAGE_TENANT_SLUG;
     this.tenantName = tenantName || process.env.LABLINEAGE_TENANT_NAME || this.tenantSlug;
     this.state = null;
+    this.stateQueue = Promise.resolve();
     this.tenantId = tenantId || process.env.LABLINEAGE_TENANT_ID || null;
     this.dataDir = path.resolve(backendDir, '..', '..', process.env.LABLINEAGE_DATA_DIR || '.lablineage');
+  }
+
+  async withStateLock(operation) {
+    const previous = this.stateQueue;
+    let release;
+    this.stateQueue = new Promise((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   async init() {
@@ -130,23 +143,25 @@ export class PostgresStore {
   }
 
   async refresh() {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN READ ONLY');
-      await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [this.tenantId]);
-      const result = await client.query('SELECT state FROM application_state WHERE tenant_id=$1', [this.tenantId]);
-      await client.query('COMMIT');
-      if (!result.rowCount) throw new Error('Tenant application state is missing');
-      this.state = result.rows[0].state;
-      normalizeStateOwnership(this.state);
-      enforceR4Evidence(this.state);
-      return this.state;
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw error;
-    } finally {
-      client.release();
-    }
+    return this.withStateLock(async () => {
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN READ ONLY');
+        await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [this.tenantId]);
+        const result = await client.query('SELECT state FROM application_state WHERE tenant_id=$1', [this.tenantId]);
+        await client.query('COMMIT');
+        if (!result.rowCount) throw new Error('Tenant application state is missing');
+        this.state = result.rows[0].state;
+        normalizeStateOwnership(this.state);
+        enforceR4Evidence(this.state);
+        return this.state;
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    });
   }
 
   get() {
@@ -155,32 +170,35 @@ export class PostgresStore {
   }
 
   async update(mutator) {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [this.tenantId]);
-      const locked = await client.query(
-        'SELECT state,version FROM application_state WHERE tenant_id=$1 FOR UPDATE',
-        [this.tenantId]
-      );
-      if (!locked.rowCount) throw new Error('Tenant application state is missing');
-      this.state = locked.rows[0].state;
-      const result = await mutator(this.state);
-      await client.query(
-        `UPDATE application_state
-         SET state=$2::jsonb,version=version+1,updated_at=now()
-         WHERE tenant_id=$1`,
-        [this.tenantId, JSON.stringify(this.state)]
-      );
-      await syncNormalizedProjection(client, this.tenantId, this.state);
-      await client.query('COMMIT');
-      return result;
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw error;
-    } finally {
-      client.release();
-    }
+    return this.withStateLock(async () => {
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [this.tenantId]);
+        const locked = await client.query(
+          'SELECT state,version FROM application_state WHERE tenant_id=$1 FOR UPDATE',
+          [this.tenantId]
+        );
+        if (!locked.rowCount) throw new Error('Tenant application state is missing');
+        const nextState = locked.rows[0].state;
+        const result = await mutator(nextState);
+        await client.query(
+          `UPDATE application_state
+           SET state=$2::jsonb,version=version+1,updated_at=now()
+           WHERE tenant_id=$1`,
+          [this.tenantId, JSON.stringify(nextState)]
+        );
+        await syncNormalizedProjection(client, this.tenantId, nextState);
+        await client.query('COMMIT');
+        this.state = nextState;
+        return result;
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    });
   }
 
   async log({ action, resource, status = 'success', details, userSubject, actor }) {

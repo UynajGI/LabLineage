@@ -556,6 +556,7 @@ export async function executeAnalysisRun(store, runId, {
     try {
       await store.update((state) => {
         const run = state.analysisRuns.find((item) => item.id === runId);
+        if (!run || ANALYSIS_TERMINAL_STATUSES.includes(run.status)) return;
         if (run.currentStep === 'finalize') {
           run.pipelineState ||= {};
           run.pipelineState.finalizeStartedAt ||= new Date().toISOString();
@@ -602,6 +603,7 @@ export async function executeAnalysisRun(store, runId, {
       const errorCode = String(error.code || (claimed.step.name === 'agent_summary' ? 'ADK_FAILED' : 'ANALYSIS_STEP_FAILED')).slice(0, 100);
       await store.update((state) => {
         const run = state.analysisRuns.find((item) => item.id === runId);
+        if (!run || ANALYSIS_TERMINAL_STATUSES.includes(run.status)) return;
         failAnalysisStep(state, {
           runId,
           stepName: claimed.step.name,

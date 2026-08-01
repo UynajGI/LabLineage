@@ -8,6 +8,7 @@ const bearerToken = String(process.env.LABLINEAGE_CANARY_BEARER_TOKEN || '');
 const developmentAuth = process.env.LABLINEAGE_CANARY_DEVELOPMENT_AUTH === 'true';
 const githubRepository = String(process.env.LABLINEAGE_CANARY_GITHUB_REPOSITORY || '');
 const requireGitHub = process.env.LABLINEAGE_CANARY_REQUIRE_GITHUB === 'true';
+const maxAttempts = Number(process.env.LABLINEAGE_CANARY_MAX_ATTEMPTS || 90);
 const outputPath = process.argv[2] || 'artifacts/analysis-canary.json';
 
 if (!baseUrl || (!bearerToken && !developmentAuth)) {
@@ -15,6 +16,9 @@ if (!baseUrl || (!bearerToken && !developmentAuth)) {
 }
 if (requireGitHub && !githubRepository) {
   throw new Error('GitHub canary is required but LABLINEAGE_CANARY_GITHUB_REPOSITORY is missing');
+}
+if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 90) {
+  throw new Error('LABLINEAGE_CANARY_MAX_ATTEMPTS must be an integer from 1 to 90');
 }
 
 const authHeaders = developmentAuth
@@ -41,8 +45,10 @@ async function request(pathname, { method = 'GET', body, authenticated = true } 
 }
 
 async function waitForRun(projectId, runId) {
-  for (let attempt = 0; attempt < 90; attempt += 1) {
+  let lastRun = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const run = await request(`/v1/projects/${projectId}/analysis-runs/${runId}`);
+    lastRun = run;
     if (['completed', 'partial', 'failed', 'cancelled'].includes(run.status)) {
       if (!['completed', 'partial'].includes(run.status) || !run.deterministicReady) {
         throw new Error(`analysis ${runId} ended in ${run.status}`);
@@ -55,7 +61,7 @@ async function waitForRun(projectId, runId) {
     }
     await new Promise((resolve) => setTimeout(resolve, Math.min(10_000, 1000 + attempt * 250)));
   }
-  throw new Error(`analysis ${runId} did not reach a terminal state`);
+  throw new Error(`analysis ${runId} did not reach a terminal state (last status: ${lastRun?.status || 'unknown'}, step: ${lastRun?.currentStep || 'unknown'})`);
 }
 
 const generatedAt = new Date().toISOString();

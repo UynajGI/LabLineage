@@ -79,9 +79,13 @@ jobs:
             fi
             sleep 2
           done
-          LABLINEAGE_CANARY_URL=http://127.0.0.1:18789 \
-          LABLINEAGE_CANARY_DEVELOPMENT_AUTH=true \
-            node scripts/staging-analysis-canary.mjs artifacts/container-analysis-canary.json
+          if ! LABLINEAGE_CANARY_URL=http://127.0.0.1:18789 \
+            LABLINEAGE_CANARY_DEVELOPMENT_AUTH=true \
+            LABLINEAGE_CANARY_MAX_ATTEMPTS=20 \
+              node scripts/staging-analysis-canary.mjs artifacts/container-analysis-canary.json; then
+            docker logs --tail 200 "${container}"
+            exit 1
+          fi
       - name: Scan production image for critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
