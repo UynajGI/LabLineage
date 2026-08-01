@@ -14,6 +14,19 @@ output "bundle_bucket" {
   value = google_storage_bucket.bundles.name
 }
 
+output "analysis_queue" {
+  value = google_cloud_tasks_queue.analysis.name
+}
+
+output "analysis_worker_service_account" {
+  value = google_service_account.analysis_worker_invoker.email
+}
+
+output "github_app_private_key_secret" {
+  description = "Secret container only; add the private key version out of band."
+  value       = google_secret_manager_secret.github_app_key.secret_id
+}
+
 output "artifact_repository" {
   value = google_artifact_registry_repository.guardian.repository_id
 }

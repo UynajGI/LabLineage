@@ -123,6 +123,7 @@ jobs:
             --project "${GCP_PROJECT_ID}" \
             --format='value(status.url)')"
           identity_token="$(gcloud auth print-identity-token --audiences="${service_url}")"
+          ready=false
           for attempt in {1..20}; do
             if curl --fail --silent --show-error \
               --header "Authorization: Bearer ${identity_token}" \
@@ -135,20 +136,51 @@ jobs:
               echo "DEPLOY_REVISION=${revision}" >> "${GITHUB_ENV}"
               echo "DEPLOY_SERVICE_URL=${service_url}" >> "${GITHUB_ENV}"
               echo "DEPLOY_PREVIOUS_IMAGE=${previous_image}" >> "${GITHUB_ENV}"
-              trap - ERR
-              exit 0
+              ready=true
+              break
             fi
             sleep 5
           done
-          echo "::error::Cloud Run readiness did not succeed within 100 seconds"
-          exit 1
+          if [[ "${ready}" != "true" ]]; then
+            echo "::error::Cloud Run readiness did not succeed within 100 seconds"
+            exit 1
+          fi
+          trap - ERR
+
+      - name: Run automatic analysis canary and roll back on failure
+        shell: bash
+        env:
+          LABLINEAGE_CANARY_BEARER_TOKEN: ${{ secrets.STAGING_CANARY_BEARER_TOKEN }}
+          LABLINEAGE_CANARY_GITHUB_REPOSITORY: ${{ vars.STAGING_CANARY_GITHUB_REPOSITORY }}
+          LABLINEAGE_CANARY_REQUIRE_GITHUB: 'true'
+        run: |
+          set -euo pipefail
+          rollback() {
+            echo "::warning::Analysis canary failed; restoring the previous image"
+            echo "DEPLOY_EVIDENCE_STATUS=rolled_back_canary" >> "${GITHUB_ENV}"
+            gcloud run services update "${CLOUD_RUN_SERVICE}" \
+              --image "${DEPLOY_PREVIOUS_IMAGE}" \
+              --region "${GCP_REGION}" \
+              --project "${GCP_PROJECT_ID}" \
+              --quiet
+          }
+          trap rollback ERR
+          if [[ -z "${LABLINEAGE_CANARY_BEARER_TOKEN}" ]]; then
+            echo "::error::STAGING_CANARY_BEARER_TOKEN is required in the protected environment"
+            exit 1
+          fi
+          export LABLINEAGE_CANARY_URL="${DEPLOY_SERVICE_URL}"
+          node scripts/staging-analysis-canary.mjs artifacts/analysis-canary.json
+          echo "DEPLOY_EVIDENCE_STATUS=passed" >> "${GITHUB_ENV}"
+          echo "DEPLOY_CANARY_STATUS=passed" >> "${GITHUB_ENV}"
+          trap - ERR
 
       - name: Record Cloud Run deployment evidence
         if: always()
         shell: bash
         run: |
           mkdir -p artifacts
-          node -e "const fs=require('fs'),crypto=require('crypto'); const hash=v=>v?crypto.createHash('sha256').update(v).digest('hex'):null; const evidence={schemaVersion:'lablineage.deployment-evidence.v1',generatedAt:new Date().toISOString(),status:process.env.DEPLOY_EVIDENCE_STATUS||'failed_before_readiness',commitSha:process.env.DEPLOY_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:Number(process.env.GITHUB_RUN_ATTEMPT),environment:process.env.DEPLOY_ENVIRONMENT,image:process.env.DEPLOY_IMAGE||null,previousImage:process.env.DEPLOY_PREVIOUS_IMAGE||null,revision:process.env.DEPLOY_REVISION||null,serviceUrlSha256:hash(process.env.DEPLOY_SERVICE_URL),readinessEndpoint:'/api/ready',identity:'github-oidc',rollbackConfigured:true}; fs.writeFileSync('artifacts/cloud-run-deployment.json',JSON.stringify(evidence,null,2)+'\n')"
+          node -e "const fs=require('fs'),crypto=require('crypto'); const hash=v=>v?crypto.createHash('sha256').update(v).digest('hex'):null; const canaryBytes=fs.existsSync('artifacts/analysis-canary.json')?fs.readFileSync('artifacts/analysis-canary.json'):null; const canary=canaryBytes?JSON.parse(canaryBytes.toString('utf8')):null; const evidence={schemaVersion:'lablineage.deployment-evidence.v1',generatedAt:new Date().toISOString(),status:process.env.DEPLOY_EVIDENCE_STATUS||'failed_before_readiness',commitSha:process.env.DEPLOY_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:Number(process.env.GITHUB_RUN_ATTEMPT),environment:process.env.DEPLOY_ENVIRONMENT,image:process.env.DEPLOY_IMAGE||null,previousImage:process.env.DEPLOY_PREVIOUS_IMAGE||null,revision:process.env.DEPLOY_REVISION||null,serviceUrlSha256:hash(process.env.DEPLOY_SERVICE_URL),readinessEndpoint:'/api/ready',identity:'github-oidc',rollbackConfigured:true,analysisCanarySha256:hash(canaryBytes),analysisCanary:canary}; fs.writeFileSync('artifacts/cloud-run-deployment.json',JSON.stringify(evidence,null,2)+'\n')"
         env:
           DEPLOY_ENVIRONMENT: ${{ github.event.inputs.environment || 'staging' }}
 
@@ -157,6 +189,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cloud-run-deployment-${{ env.DEPLOY_SHA }}-${{ github.run_attempt }}
-          path: artifacts/cloud-run-deployment.json
+          path: |
+            artifacts/cloud-run-deployment.json
+            artifacts/analysis-canary.json
           if-no-files-found: error
           retention-days: 90

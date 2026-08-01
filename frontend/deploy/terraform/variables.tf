@@ -69,15 +69,60 @@ variable "oidc_token_endpoint" { type = string }
 variable "oidc_redirect_uri" { type = string }
 
 variable "trusted_collector_fingerprints" {
-  description = "Comma-separated SHA-256 SPKI fingerprints."
+  description = "Optional comma-separated SHA-256 SPKI fingerprints for the legacy global Manifest endpoint. Project-paired Collectors register keys dynamically."
   type        = string
+  default     = ""
 }
 
-variable "google_genai_api_key" {
-  description = "Optional Vertex Express/Gemini API key. Prefer injecting a pre-existing secret outside Terraform."
+variable "google_genai_api_key_secret_id" {
+  description = "Optional existing Secret Manager secret ID containing a Gemini API key. Leave null to use Vertex AI ADC."
   type        = string
-  sensitive   = true
   default     = null
+}
+
+variable "google_genai_api_key_secret_version" {
+  description = "Version of the existing Gemini key secret to inject. Pin a numeric version for controlled releases."
+  type        = string
+  default     = "latest"
+}
+
+variable "use_vertex_ai" {
+  description = "Use Vertex AI with the runtime service account and Application Default Credentials."
+  type        = bool
+  default     = true
+}
+
+variable "github_app_id" {
+  description = "GitHub App ID used for read-only repository collection."
+  type        = string
+  default     = null
+}
+
+variable "github_app_installation_id" {
+  description = "GitHub App installation ID selected for this deployment."
+  type        = string
+  default     = null
+}
+
+variable "github_app_private_key_secret_version" {
+  description = "Existing version in the Terraform-created lablineage-github-app-key secret. Terraform never receives the private key value."
+  type        = string
+  default     = "latest"
+}
+
+variable "analysis_queue_name" {
+  description = "Cloud Tasks queue for durable automatic project analysis."
+  type        = string
+  default     = "lablineage-analysis"
+}
+
+variable "analysis_worker_url" {
+  description = "Canonical HTTPS URL for the Cloud Run worker endpoint, ending in /internal/analysis-worker."
+  type        = string
+  validation {
+    condition     = can(regex("^https://.+/internal/analysis-worker$", var.analysis_worker_url))
+    error_message = "analysis_worker_url must be an HTTPS URL ending in /internal/analysis-worker."
+  }
 }
 
 variable "model" {

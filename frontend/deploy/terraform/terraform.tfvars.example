@@ -4,6 +4,10 @@ image       = "asia-east1-docker.pkg.dev/replace-with-project/lablineage/guardia
 artifact_repository_id = "lablineage"
 enable_github_deploy    = true
 github_repository       = "UynajGI/LabLineage"
+github_app_id           = "replace-with-github-app-id"
+github_app_installation_id = "replace-with-installation-id"
+# Add the PEM value out of band to the Terraform-created secret container, then pin its version here.
+github_app_private_key_secret_version = "1"
 tenant_id   = "11111111-1111-4111-8111-111111111111"
 tenant_slug = "example-lab"
 tenant_name = "Example Lab"
@@ -16,7 +20,11 @@ oidc_authorization_endpoint = "https://issuer.example/authorize"
 oidc_token_endpoint         = "https://issuer.example/oauth/token"
 oidc_redirect_uri           = "https://replace-with-cloud-run-url/"
 
-trusted_collector_fingerprints = "replace-with-sha256-spki-fingerprint"
+analysis_worker_url = "https://replace-with-service-url/internal/analysis-worker"
+use_vertex_ai       = true
+# Optional key fallback. Prefer Vertex AI ADC; if needed, reference an existing secret by ID.
+# google_genai_api_key_secret_id      = "lablineage-google-genai-api-key"
+# google_genai_api_key_secret_version = "1"
 # The static shell and PKCE callback must be reachable before the browser has a token.
 # /v1 remains protected by application OIDC. Use an IAP/proxy architecture instead
 # if organizational policy forbids public Cloud Run invocation.

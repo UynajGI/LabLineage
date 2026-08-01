@@ -18,12 +18,15 @@ provider "google" {
 }
 
 locals {
-  database_name = "lablineage"
-  runtime_role  = "lablineage_app"
-  owner_role    = "lablineage_owner"
+  database_name      = "lablineage"
+  runtime_role       = "lablineage_app"
+  owner_role         = "lablineage_owner"
+  github_app_enabled = var.github_app_id != null && var.github_app_installation_id != null
   required_apis = toset([
     "artifactregistry.googleapis.com",
+    "cloudtasks.googleapis.com",
     "iamcredentials.googleapis.com",
+    "monitoring.googleapis.com",
     "run.googleapis.com",
     "secretmanager.googleapis.com",
     "sqladmin.googleapis.com",
@@ -31,6 +34,18 @@ locals {
   ])
   runtime_database_url = "postgresql://${local.runtime_role}:${urlencode(random_password.runtime_database.result)}@/${local.database_name}?host=/cloudsql/${google_sql_database_instance.postgres.connection_name}"
   owner_database_url   = "postgresql://${local.owner_role}:${urlencode(random_password.owner_database.result)}@/${local.database_name}?host=/cloudsql/${google_sql_database_instance.postgres.connection_name}"
+}
+
+data "google_project" "current" {}
+
+check "github_app_configuration" {
+  assert {
+    condition = (
+      (var.github_app_id == null && var.github_app_installation_id == null)
+      || (var.github_app_id != null && var.github_app_installation_id != null)
+    )
+    error_message = "github_app_id and github_app_installation_id must be configured together."
+  }
 }
 
 resource "google_project_service" "required" {
@@ -138,6 +153,11 @@ resource "google_service_account" "migration" {
   display_name = "LabLineage Guardian migration job"
 }
 
+resource "google_service_account" "analysis_worker_invoker" {
+  account_id   = "lablineage-task-worker"
+  display_name = "LabLineage Cloud Tasks worker invoker"
+}
+
 resource "google_project_iam_member" "runtime_cloudsql" {
   project = var.project_id
   role    = "roles/cloudsql.client"
@@ -148,6 +168,32 @@ resource "google_project_iam_member" "migration_cloudsql" {
   project = var.project_id
   role    = "roles/cloudsql.client"
   member  = "serviceAccount:${google_service_account.migration.email}"
+}
+
+resource "google_project_iam_member" "runtime_cloud_tasks_enqueuer" {
+  project = var.project_id
+  role    = "roles/cloudtasks.enqueuer"
+  member  = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_project_iam_member" "runtime_vertex_ai" {
+  count   = var.use_vertex_ai ? 1 : 0
+  project = var.project_id
+  role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_service_account_iam_member" "runtime_act_as_analysis_worker" {
+  service_account_id = google_service_account.analysis_worker_invoker.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_service_account_iam_member" "cloud_tasks_mint_worker_token" {
+  service_account_id = google_service_account.analysis_worker_invoker.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
+  depends_on         = [google_project_service.required]
 }
 
 resource "google_service_account_iam_member" "github_deployer_act_as_runtime" {
@@ -268,21 +314,6 @@ resource "google_secret_manager_secret" "workspace_oauth" {
   depends_on = [google_project_service.required]
 }
 
-resource "google_secret_manager_secret" "model_api_key" {
-  count     = var.google_genai_api_key == null ? 0 : 1
-  secret_id = "lablineage-google-genai-api-key"
-  replication {
-    auto {}
-  }
-  depends_on = [google_project_service.required]
-}
-
-resource "google_secret_manager_secret_version" "model_api_key" {
-  count       = var.google_genai_api_key == null ? 0 : 1
-  secret      = google_secret_manager_secret.model_api_key[0].id
-  secret_data = var.google_genai_api_key
-}
-
 resource "google_secret_manager_secret_iam_member" "runtime_database" {
   secret_id = google_secret_manager_secret.runtime_database_url.id
   role      = "roles/secretmanager.secretAccessor"
@@ -296,8 +327,15 @@ resource "google_secret_manager_secret_iam_member" "migration_database" {
 }
 
 resource "google_secret_manager_secret_iam_member" "runtime_model_key" {
-  count     = var.google_genai_api_key == null ? 0 : 1
-  secret_id = google_secret_manager_secret.model_api_key[0].id
+  count     = var.google_genai_api_key_secret_id == null ? 0 : 1
+  secret_id = var.google_genai_api_key_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_github_app_key" {
+  count     = local.github_app_enabled ? 1 : 0
+  secret_id = google_secret_manager_secret.github_app_key.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.runtime.email}"
 }
@@ -333,6 +371,50 @@ resource "google_storage_bucket_iam_member" "runtime_object_viewer" {
   member = "serviceAccount:${google_service_account.runtime.email}"
 }
 
+resource "google_cloud_tasks_queue" "analysis" {
+  name     = var.analysis_queue_name
+  location = var.region
+
+  rate_limits {
+    max_concurrent_dispatches = 10
+    max_dispatches_per_second = 5
+  }
+  retry_config {
+    max_attempts       = 10
+    max_retry_duration = "86400s"
+    min_backoff        = "5s"
+    max_backoff        = "3600s"
+    max_doublings      = 8
+  }
+  stackdriver_logging_config {
+    sampling_ratio = 1.0
+  }
+  depends_on = [google_project_service.required]
+}
+
+resource "google_monitoring_alert_policy" "analysis_retry_pressure" {
+  display_name = "LabLineage analysis queue retry pressure"
+  combiner     = "OR"
+  conditions {
+    display_name = "Analysis task attempts exceed expected rate"
+    condition_threshold {
+      filter          = "resource.type = \"cloud_tasks_queue\" AND resource.labels.queue_id = \"${google_cloud_tasks_queue.analysis.name}\" AND metric.type = \"cloudtasks.googleapis.com/queue/task_attempt_count\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 20
+      duration        = "300s"
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_DELTA"
+      }
+    }
+  }
+  documentation {
+    content   = "Automatic analysis tasks are retrying. Inspect run events, retry only failed stages, and preserve immutable input/report objects."
+    mime_type = "text/markdown"
+  }
+  depends_on = [google_project_service.required]
+}
+
 resource "google_cloud_run_v2_service" "guardian" {
   name                = "lablineage-guardian"
   location            = var.region
@@ -341,6 +423,11 @@ resource "google_cloud_run_v2_service" "guardian" {
   depends_on = [
     google_project_service.required,
     google_secret_manager_secret_version.runtime_database_url,
+    google_cloud_tasks_queue.analysis,
+    google_project_iam_member.runtime_cloud_tasks_enqueuer,
+    google_project_iam_member.runtime_vertex_ai,
+    google_secret_manager_secret_iam_member.runtime_github_app_key,
+    google_secret_manager_secret_iam_member.runtime_model_key,
     google_storage_bucket_iam_member.runtime_object_creator,
     google_storage_bucket_iam_member.runtime_object_viewer
   ]
@@ -378,6 +465,10 @@ resource "google_cloud_run_v2_service" "guardian" {
       env {
         name  = "NODE_ENV"
         value = "production"
+      }
+      env {
+        name  = "LABLINEAGE_DEPLOYMENT_MODE"
+        value = "google_cloud"
       }
       env {
         name  = "PORT"
@@ -444,12 +535,67 @@ resource "google_cloud_run_v2_service" "guardian" {
         value = "gcs"
       }
       env {
+        name  = "LABLINEAGE_TASK_DISPATCHER"
+        value = "cloud_tasks"
+      }
+      env {
+        name  = "LABLINEAGE_TASKS_LOCATION"
+        value = var.region
+      }
+      env {
+        name  = "LABLINEAGE_TASKS_QUEUE"
+        value = google_cloud_tasks_queue.analysis.name
+      }
+      env {
+        name  = "LABLINEAGE_ANALYSIS_WORKER_URL"
+        value = var.analysis_worker_url
+      }
+      env {
+        name  = "LABLINEAGE_TASKS_AUDIENCE"
+        value = trimsuffix(var.analysis_worker_url, "/internal/analysis-worker")
+      }
+      env {
+        name  = "LABLINEAGE_TASKS_SERVICE_ACCOUNT"
+        value = google_service_account.analysis_worker_invoker.email
+      }
+      env {
         name  = "LABLINEAGE_GCS_BUCKET"
         value = google_storage_bucket.bundles.name
       }
       env {
         name  = "GOOGLE_CLOUD_PROJECT"
         value = var.project_id
+      }
+      env {
+        name  = "GOOGLE_CLOUD_LOCATION"
+        value = var.region
+      }
+      env {
+        name  = "GOOGLE_GENAI_USE_VERTEXAI"
+        value = var.use_vertex_ai ? "TRUE" : "FALSE"
+      }
+
+      dynamic "env" {
+        for_each = local.github_app_enabled ? {
+          GITHUB_APP_ID              = var.github_app_id
+          GITHUB_APP_INSTALLATION_ID = var.github_app_installation_id
+        } : {}
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+      dynamic "env" {
+        for_each = local.github_app_enabled ? [1] : []
+        content {
+          name = "GITHUB_APP_PRIVATE_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.github_app_key.secret_id
+              version = var.github_app_private_key_secret_version
+            }
+          }
+        }
       }
 
       dynamic "env" {
@@ -469,13 +615,13 @@ resource "google_cloud_run_v2_service" "guardian" {
         }
       }
       dynamic "env" {
-        for_each = var.google_genai_api_key == null ? [] : [1]
+        for_each = var.google_genai_api_key_secret_id == null ? [] : [1]
         content {
           name = "GOOGLE_GENAI_API_KEY"
           value_source {
             secret_key_ref {
-              secret  = google_secret_manager_secret.model_api_key[0].secret_id
-              version = "latest"
+              secret  = var.google_genai_api_key_secret_id
+              version = var.google_genai_api_key_secret_version
             }
           }
         }
@@ -569,4 +715,12 @@ resource "google_cloud_run_v2_service_iam_member" "invoker" {
   name     = google_cloud_run_v2_service.guardian.name
   role     = "roles/run.invoker"
   member   = each.value
+}
+
+resource "google_cloud_run_v2_service_iam_member" "analysis_worker_invoker" {
+  project  = var.project_id
+  location = google_cloud_run_v2_service.guardian.location
+  name     = google_cloud_run_v2_service.guardian.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.analysis_worker_invoker.email}"
 }
