@@ -19,6 +19,10 @@ UI names below carry both languages.
    leakage rate, P95 latency, tokens, and estimated cost.
 8. Open **Directory Diff（目录差异）**, scan an allowed demo directory, change one
    file, scan again, and show that a move candidate is not presented as a fact.
+8b. Open **Upload Center（上传中心）** and drag a project `.zip` in: the archive is
+    extracted, scanned, and fingerprinted on the server (path-traversal entries
+    are skipped), and the new snapshot diff shows up in **Directory Diff（目录差异）**.
+    JSON manifests still follow the validated manifest import path.
 9. Trigger a reproducibility audit and show the R0–R4 breakdown. Emphasize that
    R4 requires a successful controlled rerun with matching output hashes.
 10. Open **Handoff（交接工作区）**, generate a preview, and show that no email,

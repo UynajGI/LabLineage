@@ -21,6 +21,25 @@ type CapabilitiesResponse = {
   actor: { subject: string; kind: string; roles: string[] };
   capabilities: Array<{ id: string; title: string; state: 'ready' | 'configured' | 'development' | 'not_configured'; detail: string }>;
 };
+export type UploadArchiveResult = {
+  snapshot: {
+    id: string;
+    fileCount: number;
+    directoryRootHash: string;
+    sourceLabel: string;
+    collectedAt: string;
+    baseline: boolean;
+  };
+  changes: unknown[];
+  upload: {
+    filename: string;
+    sha256: string;
+    sizeBytes: number;
+    extractedFiles: number;
+    extractedBytes: number;
+    warnings: string[];
+  };
+};
 let activeProjectId: string | null = null;
 let projectIdRequest: Promise<string> | null = null;
 let projectsRequest: Promise<ProjectSummary[]> | null = null;
@@ -313,6 +332,25 @@ export const api = {
 
   async importManifest(manifest: unknown) {
     return request('/v1/manifests', { method: 'POST', body: JSON.stringify(manifest) });
+  },
+
+  async uploadArchive(file: File): Promise<UploadArchiveResult> {
+    // multipart 上传：不能走 request()（它会强制 Content-Type: application/json）
+    const form = new FormData();
+    form.append('file', file);
+    const response = await fetch(`${API_ROOT}/v1/projects/${await projectId()}/archives`, {
+      method: 'POST',
+      headers: {
+        ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+        'Idempotency-Key': globalThis.crypto.randomUUID()
+      },
+      body: form
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(payload.error || `Upload failed (${response.status})`);
+    }
+    return response.json() as Promise<UploadArchiveResult>;
   },
 
   async listAgentConversations(): Promise<AgentConversation[]> {

@@ -137,6 +137,17 @@ const translations: Record<string, { en: string; zh: string }> = {
   'Upload & Validate': { en: 'Upload & Validate', zh: '上传并校验' },
   'Upload Another': { en: 'Upload Another', zh: '再传一个' },
   'Try Again': { en: 'Try Again', zh: '重试' },
+  'Import a project archive (.zip) or a validated manifest JSON.': { en: 'Import a project archive (.zip) or a validated manifest JSON.', zh: '导入项目压缩包（.zip）或已校验的清单 JSON。' },
+  'Click or drag a project.zip or manifest.json here': { en: 'Click or drag a project.zip or manifest.json here', zh: '点击或拖拽项目 .zip 或 manifest.json 到此处' },
+  'Project archive': { en: 'Project archive', zh: '项目压缩包' },
+  'Manifest JSON': { en: 'Manifest JSON', zh: '清单 JSON' },
+  'Maximum archive size: 100 MB': { en: 'Maximum archive size: 100 MB', zh: '压缩包上限：100 MB' },
+  'Archives are extracted, scanned and fingerprinted on the server before import.': { en: 'Archives are extracted, scanned and fingerprinted on the server before import.', zh: '压缩包会在服务端解压、扫描并计算指纹后再导入。' },
+  'Uploading archive, extracting and scanning...': { en: 'Uploading archive, extracting and scanning...', zh: '正在上传压缩包、解压并扫描…' },
+  'Scanned {fileCount} files from {filename} ({extractedFiles} extracted).': { en: 'Scanned {fileCount} files from {filename} ({extractedFiles} extracted).', zh: '已从 {filename} 扫描 {fileCount} 个文件（解压 {extractedFiles} 个）。' },
+  'Archive scan failed.': { en: 'Archive scan failed.', zh: '压缩包扫描失败。' },
+  'Archives are limited to 100 MB.': { en: 'Archives are limited to 100 MB.', zh: '压缩包上限为 100 MB。' },
+  'Skipped {count} unsafe archive entries.': { en: 'Skipped {count} unsafe archive entries.', zh: '已跳过 {count} 个不安全的压缩包条目。' },
 
   // ---- SecurityAudit ----
   'Security summary unavailable': { en: 'Security summary unavailable', zh: '安全摘要不可用' },

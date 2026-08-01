@@ -45,6 +45,7 @@ const routeDefinitions = [
   ['get', '/v1/projects/{projectId}/audit-events', 'Read immutable audit events'],
   ['post', '/v1/projects/{projectId}/nodes/{nodeId}/confirm', 'Confirm an inferred node'],
   ['post', '/v1/projects/{projectId}/snapshots', 'Scan an allowlisted server directory'],
+  ['post', '/v1/projects/{projectId}/archives', 'Upload a project archive (zip) and scan it'],
   ['get', '/v1/projects/{projectId}/changes', 'Read latest project changes'],
   ['get', '/v1/projects/{projectId}/snapshots', 'List project snapshots'],
   ['get', '/v1/projects/{projectId}/snapshots/{snapshotId}/diff', 'Read a snapshot diff'],
@@ -116,6 +117,14 @@ const requestSchemaByRoute = {
       properties: { includeTextDiff: { const: true } }
     },
     then: { required: ['confirmation'] }
+  },
+  'post /v1/projects/{projectId}/archives': {
+    type: 'object',
+    additionalProperties: false,
+    required: ['file'],
+    properties: {
+      file: { type: 'string', format: 'binary', description: 'Project archive in .zip format' }
+    }
   },
   'post /v1/projects/{projectId}/agent/conversations': {
     type: 'object',

@@ -30,6 +30,7 @@
     "@opentelemetry/exporter-trace-otlp-http": "^0.205.0",
     "@opentelemetry/sdk-node": "^0.221.0",
     "adm-zip": "^0.6.0",
+    "busboy": "^1.6.0",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "express-rate-limit": "^7.5.0",

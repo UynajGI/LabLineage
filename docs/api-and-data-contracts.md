@@ -115,6 +115,29 @@
 RepositorySnapshot、evidence 与 lineage edge。原始本地路径和内部允许根不在
 响应或 evidence 中出现。旧的 `/github/sync` 在 v1 内保留兼容。
 
+## 项目归档上传（zip 扫描）契约
+
+`POST /v1/projects/{projectId}/archives` 接受 `multipart/form-data`，字段
+`file`（`.zip`），把项目压缩包在服务端安全解压后走与 `POST .../snapshots`
+相同的扫描管线（指纹、分类、目录根哈希、与上一快照的 diff）。
+
+- **幂等**：与所有 v1 写路由一致，必须携带 `Idempotency-Key`；重放时按第一次
+  响应返回，并清理本次已解析的临时归档。
+- **安全上限**：zip ≤ 100 MB；解压后总字节 ≤ 200 MB；条目数 ≤ 10,000；单文件
+  ≤ 50 MB（与扫描器 `maxBytes` 对齐）。超限返回 `413`。
+- **条目名防御**：`..` 段、绝对路径、Windows 盘符（`C:`）、NUL 字节、反斜杠
+  伪装与越出解压根的目标一律跳过并记入响应的 `upload.warnings`（不阻断其余
+  内容）；非 zip 载荷返回 `415`，空归档返回 `400`。
+- **临时目录**：解压在系统临时目录进行，扫描完成或失败后立即递归清理，zip
+  内容不落库（只保留指纹化的快照）。
+- **响应 201**：`{ snapshot, changes, upload }`。`snapshot` 与现有扫描快照同构
+  （`fileCount`、`directoryRootHash`、`baseline`）；`upload` 携带文件名、
+  SHA-256、解压统计与 `warnings`。
+
+解压根通过 `allowedRoot` 传入扫描器，不依赖 `LABLINEAGE_SCAN_ROOT` 白名单——
+该白名单约束的是"任意服务器路径扫描"，而解压目录是系统为本次上传创建的受控
+临时目录。生产环境同样适用（`redactPaths` 与 `LABLINEAGE_PATH_SALT` 生效）。
+
 ## 导入载荷对象
 
 导入任务的原始 JSON 不再存入 `application_state` 或规范化业务表。任务只保存

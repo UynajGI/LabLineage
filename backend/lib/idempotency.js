@@ -20,7 +20,8 @@ function requestFingerprint(req) {
     .digest('hex');
 }
 
-function sendReplay(res, record) {
+function sendReplay(req, res, record) {
+  req.onIdempotentReplay?.();
   res.set('Idempotency-Replayed', 'true');
   res.status(record.responseStatus);
   if (record.responseKind === 'end') return res.end();
@@ -98,7 +99,7 @@ export function createIdempotencyMiddleware(store) {
       res.set('Retry-After', '1');
       return res.status(409).json({ error: 'A request with this Idempotency-Key is still in progress' });
     }
-    if (decision.kind === 'replay') return sendReplay(res, decision.record);
+    if (decision.kind === 'replay') return sendReplay(req, res, decision.record);
 
     const originalJson = res.json.bind(res);
     const originalSend = res.send.bind(res);

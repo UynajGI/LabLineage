@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ZodError, z } from 'zod';
@@ -27,6 +27,7 @@ import {
   scanDirectory
 } from './lib/scanner.js';
 import { projectSummary, stableEdgeId } from './lib/store.js';
+import { extractArchive, uploadArchiveMiddleware } from './lib/upload.js';
 import {
   HandoffStateError,
   HandoffVersionConflictError,
@@ -104,6 +105,23 @@ function requireReadableProject(req, res, next) {
     return res.status(404).json({ error: 'Project not found' });
   }
   authorizeProject('viewer')(req, res, next);
+}
+
+async function persistSnapshot(projectId, snapshot) {
+  snapshot.projectId = projectId;
+  const previousRecord = store.get().snapshots.filter((item) => item.projectId === projectId).at(-1);
+  const previous = previousRecord ? materializeSnapshotIndex(previousRecord) : null;
+  snapshot.baseline = !previous;
+  const changes = diffSnapshots(previous, snapshot);
+  snapshot.changes = changes;
+  await store.update((state) => {
+    state.snapshots.push(snapshot);
+    applySnapshotRetention(state, projectId);
+    const project = state.projects.find((item) => item.id === projectId);
+    project.lastScan = snapshot.collectedAt;
+    project.updatedAt = snapshot.collectedAt;
+  });
+  return changes;
 }
 
 async function ingestManifest(raw, actor, { sourceId = null } = {}) {
@@ -1614,21 +1632,31 @@ export function buildApp() {
       return res.status(403).json({ error: 'Text diff capture is disabled by deployment policy' });
     }
     const snapshot = await scanDirectory(input.path, { includeTextContent: input.includeTextDiff });
-    snapshot.projectId = req.params.projectId;
-    const previousRecord = store.get().snapshots.filter((item) => item.projectId === req.params.projectId).at(-1);
-    const previous = previousRecord ? materializeSnapshotIndex(previousRecord) : null;
-    snapshot.baseline = !previous;
-    const changes = diffSnapshots(previous, snapshot);
-    snapshot.changes = changes;
-    await store.update((state) => {
-      state.snapshots.push(snapshot);
-      applySnapshotRetention(state, req.params.projectId);
-      const project = state.projects.find((item) => item.id === req.params.projectId);
-      project.lastScan = snapshot.collectedAt;
-      project.updatedAt = snapshot.collectedAt;
-    });
+    const changes = await persistSnapshot(req.params.projectId, snapshot);
     await store.log({ action: 'scan_directory', actor: req.actor.subject, resource: `project/${req.params.projectId}`, details: `Captured ${snapshot.fileCount} files; ${changes.length} changes.` });
     res.status(201).json({ snapshot: snapshotSummaryForApi(snapshot), changes });
+  });
+  app.post('/v1/projects/:projectId/archives', requireProject, uploadArchiveMiddleware, requireIdempotentWrite, async (req, res) => {
+    try {
+      const extracted = await extractArchive(req.upload.zipPath, req.upload.tempDir);
+      const snapshot = await scanDirectory(extracted.destDir, { allowedRoot: extracted.destDir });
+      const changes = await persistSnapshot(req.params.projectId, snapshot);
+      await store.log({ action: 'scan_upload', actor: req.actor.subject, resource: `project/${req.params.projectId}`, details: `Captured ${snapshot.fileCount} files from ${req.upload.filename}; ${changes.length} changes.` });
+      res.status(201).json({
+        snapshot: snapshotSummaryForApi(snapshot),
+        changes,
+        upload: {
+          filename: req.upload.filename,
+          sha256: req.upload.sha256,
+          sizeBytes: req.upload.sizeBytes,
+          extractedFiles: extracted.extractedFiles,
+          extractedBytes: extracted.extractedBytes,
+          warnings: extracted.warnings
+        }
+      });
+    } finally {
+      await rm(req.upload.tempDir, { recursive: true, force: true }).catch(() => {});
+    }
   });
   app.get('/v1/projects/:projectId/changes', requireProject, (req, res) => {
     const snapshots = store.get().snapshots.filter((item) => item.projectId === req.params.projectId);

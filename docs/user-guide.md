@@ -19,6 +19,7 @@
 2. 登记 `filesystem`、`github`、`google_drive` 或 `offline_bundle` 来源。
 3. 对科研服务器使用 Edge Collector；不要把原始路径、密钥或 `.lablineage/` 上传到 Git。
 4. 在导入任务页观察 `queued → processing → completed/failed`。失败任务只有在修正 Manifest 并明确确认后才能重试。
+5. 没有 Collector 或 Git 时，可在“上传中心”直接拖入项目 `.zip`：服务端安全解压（路径穿越条目会被跳过并提示）后扫描并指纹化，生成与目录扫描同构的快照与差异，不落库原始内容。
 
 本地 Git 仓库可通过通用仓库同步接口采集。管理员必须先设置 `LABLINEAGE_LOCAL_GIT_ROOTS`；服务只读取允许目录，并仅保存文件路径哈希、Git 对象 ID、分支、标签和提交证据。
 
