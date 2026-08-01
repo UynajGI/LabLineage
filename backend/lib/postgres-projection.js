@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { syncProjectAnalysisProjection } from './project-analysis-projection.js';
 
 export function stableUuid(value) {
   const hex = createHash('sha256').update(String(value)).digest('hex').slice(0, 32).split('');
@@ -69,6 +70,12 @@ export async function syncNormalizedProjection(client, tenantId, state) {
       ]
     );
   }
+
+  await syncProjectAnalysisProjection(client, tenantId, state, {
+    projectIds,
+    sourceIds,
+    stableUuid
+  });
 
   for (const job of state.ingestionJobs || []) {
     const projectId = projectIds.get(job.projectId);

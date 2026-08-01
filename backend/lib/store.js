@@ -79,10 +79,47 @@ export function makeDemoState() {
       id: projectId,
       name: '相变研究',
       slug: 'phase-transition',
+      currentIntentVersion: 1,
       createdAt: iso(-30),
       updatedAt: iso(),
       lastScan: iso(-1)
     }],
+    projectIntents: [{
+      id: 'intent_phase_transition_v1',
+      projectId,
+      version: 1,
+      objective: '建立相变分析结果从代码、数据、参数、运行环境到论文结论的可验证证据链。',
+      constraints: ['不得把推断关系当作已确认事实'],
+      legacy: false,
+      createdBySubject: 'seed',
+      createdAt: iso(-30)
+    }],
+    projectSuccessCriteria: [{
+      id: 'criterion_phase_transition_reproducibility',
+      projectId,
+      intentId: 'intent_phase_transition_v1',
+      description: '关键图表能够追溯到代码版本、输入数据、参数和执行环境。',
+      required: true,
+      sortOrder: 0,
+      createdAt: iso(-30)
+    }],
+    projectKeyOutputs: [{
+      id: 'output_phase_transition_figure',
+      projectId,
+      intentId: 'intent_phase_transition_v1',
+      name: '论文关键相变图',
+      kind: 'figure',
+      expectedPathHint: 'fig3.png',
+      required: true,
+      sortOrder: 0,
+      createdAt: iso(-30)
+    }],
+    analysisRuns: [],
+    analysisRunSteps: [],
+    analysisReports: [],
+    analysisRunEvents: [],
+    collectorPairings: [],
+    collectorCredentials: [],
     sources: [],
     ingestionJobs: [],
     statusProposals: [],
@@ -155,6 +192,16 @@ export function enforceR4Evidence(state) {
 export function normalizeStateOwnership(state) {
   let changed = false;
   state.evidence ||= [];
+  for (const collection of [
+    'projectIntents', 'projectSuccessCriteria', 'projectKeyOutputs',
+    'analysisRuns', 'analysisRunSteps', 'analysisReports', 'analysisRunEvents',
+    'collectorPairings', 'collectorCredentials'
+  ]) {
+    if (!state[collection]) {
+      state[collection] = [];
+      changed = true;
+    }
+  }
   if (!state.sources) {
     state.sources = [];
     changed = true;
@@ -174,6 +221,40 @@ export function normalizeStateOwnership(state) {
   if (!state.idempotencyRecords) {
     state.idempotencyRecords = [];
     changed = true;
+  }
+  for (const project of state.projects || []) {
+    const intents = state.projectIntents.filter((intent) => intent.projectId === project.id);
+    if (!intents.length) {
+      const digest = createHash('sha256').update(String(project.id)).digest('hex').slice(0, 24);
+      const intentId = `intent_legacy_${digest}`;
+      state.projectIntents.push({
+        id: intentId,
+        projectId: project.id,
+        version: 1,
+        objective: '项目目的尚未配置。',
+        constraints: [],
+        legacy: true,
+        createdBySubject: 'legacy-migration',
+        createdAt: project.createdAt || new Date().toISOString()
+      });
+      state.projectSuccessCriteria.push({
+        id: `criterion_legacy_${digest}`,
+        projectId: project.id,
+        intentId,
+        description: '补充可验证的项目成功标准。',
+        required: true,
+        sortOrder: 0,
+        createdAt: project.createdAt || new Date().toISOString()
+      });
+      project.currentIntentVersion = 1;
+      changed = true;
+      continue;
+    }
+    const latestVersion = Math.max(...intents.map((intent) => intent.version));
+    if (project.currentIntentVersion !== latestVersion) {
+      project.currentIntentVersion = latestVersion;
+      changed = true;
+    }
   }
   if (state.projects?.length !== 1) return changed;
   const projectId = state.projects[0].id;
@@ -320,6 +401,9 @@ export class JsonStore {
 export function projectSummary(state, projectId) {
   const project = state.projects.find((item) => item.id === projectId);
   if (!project) return null;
+  const intent = (state.projectIntents || [])
+    .filter((item) => item.projectId === projectId)
+    .sort((left, right) => right.version - left.version)[0] || null;
   const projectNodes = state.nodes.filter((node) =>
     node.id === projectId || node.projectId === projectId || projectId === 'project_phase_transition'
   );
@@ -330,6 +414,10 @@ export function projectSummary(state, projectId) {
   return {
     id: project.id,
     name: project.name,
+    slug: project.slug,
+    objective: intent?.objective || null,
+    intentVersion: intent?.version || null,
+    intentConfigured: Boolean(intent && !intent.legacy),
     totalAssets: projectNodes.filter((node) => !['Project', 'Conclusion'].includes(node.type)).length,
     reproducibilityScores: scoreCounts,
     openFindings: state.findings.filter((finding) => finding.projectId === projectId && finding.status === 'open').length,

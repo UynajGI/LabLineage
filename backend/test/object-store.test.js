@@ -8,9 +8,11 @@ import { createObjectStore } from '../lib/object-store.js';
 test('local object store provides immutable content-addressed behavior', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lablineage-objects-'));
   const previousMode = process.env.LABLINEAGE_OBJECT_STORE;
+  const previousDeploymentMode = process.env.LABLINEAGE_DEPLOYMENT_MODE;
   const previousNodeEnv = process.env.NODE_ENV;
   try {
     process.env.NODE_ENV = 'test';
+    process.env.LABLINEAGE_DEPLOYMENT_MODE = 'local';
     process.env.LABLINEAGE_OBJECT_STORE = 'local';
     const objectStore = createObjectStore({ dataDir: directory });
     const created = await objectStore.putImmutable({
@@ -39,13 +41,17 @@ test('local object store provides immutable content-addressed behavior', async (
     );
 
     process.env.NODE_ENV = 'production';
+    assert.doesNotThrow(() => createObjectStore({ dataDir: directory }));
+    process.env.LABLINEAGE_OBJECT_STORE = 'gcs';
     assert.throws(
       () => createObjectStore({ dataDir: directory }),
-      /Local object storage is disabled in production/u,
+      /must be local/u,
     );
   } finally {
     if (previousMode === undefined) delete process.env.LABLINEAGE_OBJECT_STORE;
     else process.env.LABLINEAGE_OBJECT_STORE = previousMode;
+    if (previousDeploymentMode === undefined) delete process.env.LABLINEAGE_DEPLOYMENT_MODE;
+    else process.env.LABLINEAGE_DEPLOYMENT_MODE = previousDeploymentMode;
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousNodeEnv;
     await rm(directory, { recursive: true, force: true });

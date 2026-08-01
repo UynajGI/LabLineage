@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Storage } from '@google-cloud/storage';
+import { deploymentProfile } from './deployment-mode.js';
 
 function sha256(content) {
   return createHash('sha256').update(content).digest('hex');
@@ -140,12 +141,9 @@ class GoogleCloudObjectStore {
 }
 
 export function createObjectStore({ dataDir }) {
-  const configuredMode = process.env.LABLINEAGE_OBJECT_STORE;
-  const mode = configuredMode || (process.env.NODE_ENV === 'production' ? 'gcs' : 'local');
+  const profile = deploymentProfile();
+  const mode = profile.objectStorage;
   if (mode === 'local') {
-    if (process.env.NODE_ENV === 'production' && process.env.LABLINEAGE_ALLOW_LOCAL_OBJECT_STORE !== 'true') {
-      throw new Error('Local object storage is disabled in production');
-    }
     return new LocalObjectStore(dataDir);
   }
   if (mode === 'gcs') {
@@ -154,5 +152,5 @@ export function createObjectStore({ dataDir }) {
       projectId: process.env.GOOGLE_CLOUD_PROJECT,
     });
   }
-  throw new Error(`Unsupported LABLINEAGE_OBJECT_STORE mode: ${mode}`);
+  throw new Error(`Unsupported object storage mode: ${mode}`);
 }

@@ -1,11 +1,13 @@
 import { postgresConfigured } from './database.js';
 import { JsonStore } from './store.js';
 import { PostgresStore } from './postgres-store.js';
+import { deploymentProfile } from './deployment-mode.js';
 
 export async function createStore() {
+  const profile = deploymentProfile();
   if (postgresConfigured()) return new PostgresStore().init();
-  if (process.env.NODE_ENV === 'production' && process.env.LABLINEAGE_ALLOW_JSON_IN_PRODUCTION !== 'true') {
-    throw new Error('DATABASE_URL is required in production; JSON storage is development-only');
+  if (profile.mode === 'google_cloud') {
+    throw new Error('DATABASE_URL is required for google_cloud deployment mode');
   }
   return new JsonStore().init();
 }
