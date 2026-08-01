@@ -8,7 +8,7 @@ instructions.
 
 | Document | Audience | Use it for |
 |---|---|---|
-| [User guide](user-guide.md) | Researchers and reviewers | Daily lineage, audit, Guardian, snapshot, and handoff workflows |
+| [User guide](user-guide.md) | Researchers and reviewers | Project goals, Local Collector/GitHub onboarding, automatic analysis, reports, and handoff |
 | [Administrator guide](administrator-guide.md) | Operators and platform owners | Configuration, identity, storage, hooks, CI/CD, and launch checks |
 | [Demo script](demo-script.md) | Presenters and judges | A short, repeatable product walkthrough |
 | [Topic fit](topic-fit.md) | Competition team and judges | Hackathon requirement-to-solution mapping, differentiation, trade-offs, and submission checklist |
@@ -18,9 +18,9 @@ instructions.
 
 | Document | Audience | Use it for |
 |---|---|---|
-| [Architecture](architecture.md) | Engineers and security reviewers | Components, ADK orchestration, trust boundaries, and persistence |
+| [Architecture](architecture.md) | Engineers and security reviewers | Deployment profiles, automatic analysis, ADK orchestration, trust boundaries, and persistence |
 | [API and data contracts](api-and-data-contracts.md) | API and database maintainers | Compatibility, idempotency, migrations, retention, and import contracts |
-| [Edge Collector guide](collector-guide.md) | Research-infrastructure operators | Installation, scanning, signing, export, upload, and troubleshooting |
+| [Edge Collector guide](collector-guide.md) | Research-infrastructure operators | Pairing, local-only scanning, signed sync, offline export, rotation, and troubleshooting |
 | [Snapshot tracking](snapshot-tracking.md) | Engineers and auditors | Non-Git snapshot, diff, move-candidate, and retention semantics |
 
 ## Operate and release

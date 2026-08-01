@@ -1,5 +1,47 @@
 # Architecture
 
+## Project onboarding and automatic analysis
+
+The console owns a four-stage journey: version the project intent, connect one
+source, observe a durable analysis run, and inspect its immutable report.
+Connecting a source is the trigger; there is no separate manual audit or Agent
+button in this journey.
+
+```text
+ProjectIntent vN
+      + Local Collector Manifest | GitHub commit SHA | fallback ZIP object
+      -> durable AnalysisRun
+      -> ingest -> scan -> evidence graph -> deterministic audit
+      -> objective assessment -> optional Google ADK summary
+      -> immutable report + append-only events
+```
+
+The deterministic assessment is authoritative. It evaluates each success
+criterion and key output against evidence identifiers and preserves
+`not_assessable` when evidence is missing. The ADK stage is advisory and may
+leave the run `partial`; it cannot change evidence, audit results, objective
+status, or workflow state.
+
+## Deployment profiles and the local/cloud boundary
+
+`LABLINEAGE_DEPLOYMENT_MODE` selects one validated profile without changing API
+or report semantics:
+
+| Concern | `local` | `google_cloud` |
+|---|---|---|
+| API and UI | loopback Node/Vite | Cloud Run HTTPS |
+| durable state | local JSON or explicit PostgreSQL | Cloud SQL PostgreSQL with tenant RLS |
+| immutable objects | local data directory | versioned GCS objects |
+| analysis dispatch | inline worker with lease recovery | Cloud Tasks, private worker route, OIDC |
+| model | optional local key or ADC | Vertex AI through runtime ADC by default |
+| local directory | Collector on same workstation | Collector remains on user's workstation |
+
+Cloud hosting does not make a local directory remotely mountable. The Collector
+is the trust boundary: it reads only an explicitly authorized root, keeps source
+content local by default, replaces paths with stable tokens, and signs the
+Manifest. GitHub uses a read-only App and pins the resolved commit SHA. ZIP is
+an isolated, bounded, immutable-object fallback—not the normal local flow.
+
 ```text
 React/Vite console
        │ /v1 JSON

@@ -1,5 +1,12 @@
 # Guardian Agent evaluation and usability protocol
 
+The project-onboarding pipeline invokes this Agent automatically only after the
+deterministic objective assessment. Its structured output is stored as a
+separate advisory report section. Model timeout, quota, invalid schema, or
+missing configuration must produce a `partial` run with an explicit safe error;
+it must not change criterion statuses, evidence references, audit findings, or
+the authoritative report checksum inputs.
+
 This protocol measures whether Guardian is correct, safe, explainable, usable,
 and economically observable. A successful model response is not sufficient:
 the deterministic lineage and audit services remain the authority for facts,

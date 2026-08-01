@@ -1,5 +1,11 @@
 # LabLineage Guardian 威胁模型
 
+新增项目接入边界：Collector pairing code 必须短期、单次使用；换取的凭据绑定
+tenant/project/source 与 Ed25519 公钥，并防重放、可撤销。云端永不信任客户端提供的
+绝对路径。GitHub App 私钥仅从 Secret Manager 读取，安装权限保持只读，首次解析的
+commit SHA 固定到重试。ZIP 仅为兜底，必须在解压前校验中央目录、符号链接、路径、
+大小和压缩比，在隔离临时目录处理并从不可变对象复核 checksum。
+
 | 威胁 | 主要控制 | 验证方式 |
 |---|---|---|
 | 跨租户或跨项目读取 | OIDC claims、RBAC、项目白名单、PostgreSQL RLS/FORCE RLS | 越权单测与数据库集成测试 |

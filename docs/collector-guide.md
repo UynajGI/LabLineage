@@ -1,5 +1,27 @@
 # Edge Collector 安装与安全操作指南
 
+## 控制台配对与日常同步（推荐）
+
+Local Collector 是本地目录接入本机或 Google Cloud 服务的主路径。源码默认留在
+用户电脑；Cloud Run 不能直接读取本机磁盘，Collector 在本机只读扫描授权目录并
+提交签名、脱敏的 Manifest/证据。
+
+1. 在控制台 **部署项目 → Local Collector** 生成一次性短期配对码。
+2. 在项目所在电脑执行页面给出的命令：
+
+```bash
+npm run collector -- pair --project phase-transition --root /srv/lab/projects/phase-transition --url https://guardian.example --pairing <pairing-id> --code <one-time-code>
+npm run collector -- sync --project phase-transition --root /srv/lab/projects/phase-transition
+```
+
+`pair` 在本机生成 Ed25519 身份并用短码换取项目限定凭据；短码单次使用且过期后
+必须重新生成。凭据保存在 `.lablineage/`，不得进入命令历史、日志或 Git。`sync`
+扫描、签名并提交后会自动触发完整分析，无需再进入控制台手动运行审计或 Agent。
+
+服务端按最新心跳显示在线/离线状态。撤销来源后旧凭据立即失效；轮换时先配对新
+身份并验证一次同步，再撤销旧身份。全局受信指纹只保留为受控兼容机制，新项目使用
+项目限定配对身份。
+
 ## 运行要求
 
 - Node.js 22.15 或更高版本（离线包使用 Node 内置 Zstandard 支持）。

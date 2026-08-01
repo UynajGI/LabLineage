@@ -33,16 +33,17 @@ npm run seed
 npm run dev
 ```
 
-Open [http://localhost:5173/#/checklist](http://localhost:5173/#/checklist).
+Open [http://localhost:5173/#/deploy](http://localhost:5173/#/deploy), create a
+project, declare its objective/success criteria/key outputs, and choose a source.
 The API listens on `http://127.0.0.1:8788`; health, dependency readiness, and
 the OpenAPI 3.1 contract are available at `/api/health`, `/api/ready`, and
 `/api/openapi.json`.
 
-Scanner, graph, audit, and local handoff-preview features work without a model
-key. Agent chat requires `GOOGLE_GENAI_API_KEY` or `GEMINI_API_KEY` in
+Scanner, graph, deterministic assessment, audit, and local handoff-preview
+features work without a model. Agent summaries use Google ADK and require either
+Vertex AI application-default credentials or a Gemini key in the ignored
 `backend/.env.local`. Keep secrets out of commands, logs, commits, and
-documentation. For Vertex AI Express Mode, use the matching settings from
-[`.env.example`](.env.example); `LABLINEAGE_PROXY` is optional.
+documentation; `LABLINEAGE_PROXY` is optional for local development.
 
 ## System map
 
@@ -61,6 +62,19 @@ Authenticated Express API ── PostgreSQL in production
               └── authenticated read-only MCP tools
 ```
 
+Two deployment profiles share the same API, run state machine, and report
+contract:
+
+- `local`: API, JSON/PostgreSQL state, immutable objects, and the inline worker
+  run on the workstation and bind to loopback by default.
+- `google_cloud`: Cloud Run, Cloud SQL, GCS, Cloud Tasks with OIDC, and Vertex
+  AI/ADC run in Google Cloud. The Collector still runs on the user's computer.
+
+Local source code is not uploaded as a ZIP. The Local Collector reads an
+explicitly authorized directory and sends a signed, path-redacted Manifest and
+evidence. GitHub repositories connect through a read-only GitHub App. ZIP is a
+size-limited fallback for exceptional offline transfer only.
+
 The ADK execution trace records routing, agent transitions, bounded tool calls,
 evidence identifiers, R levels, token usage, and elapsed time. Model output is
 advisory; deterministic services remain authoritative for hashes, evidence,
@@ -68,6 +82,10 @@ and reproducibility scores.
 
 ## Main workflows
 
+- **Deploy and assess a project:** declare the objective, success criteria and
+  key outputs; connect a Local Collector or GitHub repository; then follow the
+  automatically started scan, evidence-graph, audit, deterministic assessment,
+  and optional ADK-summary stages to an immutable report.
 - **Investigate lineage:** import evidence, inspect the graph, distinguish
   confirmed relationships from candidates, and review conflicts.
 - **Track non-Git work:** create immutable snapshots, compare bounded changes,
@@ -93,7 +111,10 @@ service with an identity that has no DDL permission.
 
 External integrations remain guarded:
 
-- GitHub and local Git evidence access is read-only.
+- GitHub App and local Git evidence access is read-only.
+- Cloud-hosted services never receive an absolute local path; the Collector
+  sends stable path tokens and structured evidence, with raw content disabled
+  by default.
 - Local repositories must stay under `LABLINEAGE_LOCAL_GIT_ROOTS`.
 - Google Workspace writes require a preview and explicit confirmation; Gmail
   creates drafts only.

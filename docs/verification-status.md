@@ -1,5 +1,24 @@
 # Verification status and assurance boundaries
 
+## Project onboarding validation map
+
+Repository automation covers the following contracts for the current feature:
+
+| Area | Repository evidence | Still external |
+|---|---|---|
+| Project intent and run state | unit/integration tests for versioned goals, legal transitions, lease recovery, retry/cancel and deterministic assessment | representative-user acceptance |
+| Local Collector | pairing expiry/single use, signature and replay checks, revocation, manifest-driven automatic run | cross-network Cloud Run pairing canary and target filesystem scale |
+| GitHub App | stubbed read-only collection, pinned SHA, immutable input, `403/404/429` mapping | authorized sandbox installation and live rate-limit behavior |
+| ZIP fallback | traversal/symlink/size/compression defenses, immutable object, automatic report and cleanup | approved real-data policy review |
+| Console | TypeScript build plus Playwright journey, refresh restoration, retry/error and Axe checks | assistive-technology and representative-user review |
+| Google Cloud | Terraform fmt/init/validate, deployment-mode validation and workflow lint | apply in target project, Cloud Tasks OIDC canary, alert delivery and rollback drill |
+| Google ADK | deterministic fake-model tests, structured trace/evaluation workflow, graceful `partial` fallback | controlled Vertex live evaluation with retained artifact |
+
+Passing repository checks proves the implementation contract, not a successful
+deployment in a particular GCP project. Record a live item only from that
+environment's immutable artifact; missing credentials, skipped workflows or an
+unrun canary are `not_run`, never “passed”.
+
 This document separates repeatable repository evidence from assurances that
 require a real identity provider, cloud project, third-party tenant, or
 research workload. It is a validation map, not a delivery plan.

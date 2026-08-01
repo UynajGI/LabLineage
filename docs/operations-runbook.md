@@ -1,5 +1,50 @@
 # LabLineage Guardian 运行手册
 
+## 部署模式基线
+
+- `local` 仅绑定 loopback，使用本地对象目录和 inline worker；启动时恢复过期 lease。
+- `google_cloud` 必须同时具备 PostgreSQL、OIDC、GCS、Cloud Tasks worker URL、
+  服务根 audience、调用身份和项目配置。Cloud Tasks 只以 OIDC 调用私有
+  `/internal/analysis-worker`，请求体只含 `runId`。
+- Google Cloud 默认使用 Vertex AI application-default credentials。若例外使用
+  Gemini key，只能引用既有 Secret Manager version；不得把密钥放入 tfvars、
+  Terraform state、镜像、日志或部署证据。
+- GitHub App 私钥同样只从 Secret Manager 注入。Terraform 创建空 secret 容器，
+  运维人员在带外增加 version；App ID 和 installation ID 必须成对配置。
+
+## 自动分析运行故障
+
+1. 从 `GET /v1/projects/{projectId}/analysis-runs/{runId}` 记录 run、当前 step、
+   attempts、safe error、lease 和事件时间线；不要查询或复制内部 object key。
+2. `queued` 长时间不动：本地模式检查 inline dispatcher；云模式检查 Cloud Tasks
+   queue 深度、任务 OIDC audience、worker invoker IAM 和 Cloud Run 请求日志。
+3. `running` 超过 lease：先确认没有活跃 worker，再重启服务触发恢复。禁止手改
+   PostgreSQL 状态。Cloud Tasks 名称含稳定幂等标识，重复调度不会重复执行终态运行。
+4. 可重试失败：修复外部原因后调用 run `retry`，它只从失败阶段继续，旧事件和
+   尝试记录保留。输入 checksum、GitHub SHA 和 intentVersion 不变。
+5. 不可重试或用户主动终止：调用 `cancel`。终态运行不可取消；取消不会删除不可变
+   输入或已有审计证据。
+6. ADK 阶段单独失败时运行应为 `partial`，确定性报告仍可用。不得为了显示绿色而
+   把 Agent 失败改写为成功。
+
+告警 `Cloud Tasks attempt_count > 20/5m` 表示自动分析重试压力。先按错误码区分
+GitHub `403/404/429`、GCS checksum、OIDC 和模型配额，再决定重试；不要无界扩容。
+
+## Collector 撤销与轮换
+
+控制台撤销项目来源后，项目限定凭据立即失效。轮换时创建新 pairing、在本机完成
+一次签名同步并确认来源在线，然后撤销旧来源。短码过期只需重新生成，不要延长旧码。
+泄漏事件需要保留 audit event、受影响 source ID 和时间窗，但不得保留短码、凭据、
+私钥或绝对路径。
+
+## 部署后 canary
+
+受保护环境部署只有同时满足 readiness 与端到端 canary 才能标记成功。canary 创建
+隔离项目和目标，提交签名 Collector fixture，并通过沙箱 GitHub App 只读连接
+`STAGING_CANARY_GITHUB_REPOSITORY`；两条路径都必须到达终态、生成目标判定和报告
+checksum。受保护环境必须配置 `STAGING_CANARY_BEARER_TOKEN`；缺少令牌、沙箱仓库或
+外部权限会使部署失败并恢复上一镜像，证据不得声称 canary 已通过。迁移保持前向兼容。
+
 ## 健康、指标与追踪
 
 - 存活检查：`GET /api/health`，无需身份令牌。
@@ -49,7 +94,7 @@
 ## API unavailable
 
 1. 检查 `GET /api/health`、进程状态和 8788 端口。
-2. 检查 PostgreSQL 连接池、最近迁移和磁盘空间。
+2. 检查 PostgreSQL 连接池、已应用迁移和磁盘空间。
 3. 若刚发生热重启，确认日志出现 `API listening`；前端 GET 会在短暂窗口内自动退避重试。
 4. 超过两分钟仍未恢复时，回滚上一镜像并保留相关 Trace 和日志。
 

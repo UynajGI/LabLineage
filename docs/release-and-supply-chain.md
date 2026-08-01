@@ -1,5 +1,12 @@
 # Release and supply-chain procedure
 
+A Cloud Run promotion is complete only after readiness and the protected
+automatic-analysis canary reach their required states. The retained deployment
+artifact records commit/image/revision plus canary terminal state and report
+checksum. A missing environment credential or skipped canary is `not_run`, not
+release evidence, and the protected deployment fails closed. Canary failure
+restores the previous image while database migrations remain forward-only.
+
 LabLineage Guardian treats the container image, Collector package, SBOM, and
 checksums as one release evidence set. The main-branch CI job creates and signs
 that set only after tests, cross-platform Collector checks, and Terraform

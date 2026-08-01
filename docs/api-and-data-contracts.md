@@ -1,5 +1,46 @@
 # API、Manifest 与数据库兼容策略
 
+## 项目目标与自动分析契约
+
+项目创建请求同时写入第一版目标：`objective`、`successCriteria[]`、
+`keyOutputs[]` 和可选 `constraints[]`。目标更新追加版本，不原地改写；每个
+`AnalysisRun` 固定 `intentVersion`，因此后续修改目标不会改变历史报告。
+
+主要 API：
+
+- `POST /v1/projects`：创建项目和目标 v1。
+- `GET /v1/projects/{projectId}`：返回项目、当前目标和汇总状态。
+- `POST /v1/projects/{projectId}/intent-versions`：携带 `expectedVersion` 追加目标版本。
+- `POST /v1/projects/{projectId}/collectors/pairings`：创建短期一次性配对码。
+- `POST /v1/collectors/pair`：用短码和 Collector 公钥换取项目限定凭据。
+- `POST /v1/projects/{projectId}/collector-runs`：校验签名、保存不可变输入并
+  自动创建分析运行。
+- `POST /v1/projects/{projectId}/sources/github`：通过 GitHub App 固定 commit SHA、
+  保存不可变仓库证据并自动创建分析运行。
+- `POST /v1/projects/{projectId}/archives`：离线 ZIP 兜底；返回 `202` 和运行摘要，
+  不再同步返回快照。
+- `GET /v1/projects/{projectId}/analysis-runs` 与
+  `GET /v1/projects/{projectId}/analysis-runs/{runId}`：读取运行和阶段事件。
+- `POST .../{runId}/retry`、`POST .../{runId}/cancel`：只对合法状态生效。
+- `GET .../{runId}/report`：读取确定性判定、证据引用和独立 ADK 摘要。
+
+所有写路由声明并持久化 `Idempotency-Key`。运行状态为 `queued | running |
+completed | partial | failed | cancelled`；步骤状态为 `pending | running |
+succeeded | skipped | failed`。事件是追加式的，重试不删除旧错误和尝试记录。
+终态报告仅暴露安全来源摘要、revision、证据 ID 和校验和，不暴露 GCS object key、
+GitHub 安装令牌、Collector 凭据或绝对路径。
+
+### 来源约束
+
+- **Collector**：配对短码单次、短期有效；凭据绑定 tenant/project/source 和公钥
+  指纹。Manifest 的签名、请求摘要、时钟窗口和重放均校验。撤销后所有后续提交
+  返回鉴权失败。
+- **GitHub App**：浏览器只提交仓库标识和可选分支。服务端读取 App 私钥 secret，
+  使用最小只读权限；`403`、`404`、`429` 保持可区分，重试仍固定首次解析的 SHA。
+- **ZIP**：100 MB 压缩包、200 MB 解压总量、10,000 条、单文件 50 MB；拒绝
+  符号链接、路径穿越、异常压缩比和大小不一致。载荷先写不可变对象，再由隔离 worker
+  解压扫描，临时目录在成功和失败路径都清理。
+
 ## 版本边界
 
 - HTTP API 当前主版本为 `/v1`。同一主版本只允许新增可选字段、端点或枚举能力；删除字段、改变含义、收紧已公开输入或改变状态码语义必须发布新主版本。
@@ -118,21 +159,21 @@ RepositorySnapshot、evidence 与 lineage edge。原始本地路径和内部允�
 ## 项目归档上传（zip 扫描）契约
 
 `POST /v1/projects/{projectId}/archives` 接受 `multipart/form-data`，字段
-`file`（`.zip`），把项目压缩包在服务端安全解压后走与 `POST .../snapshots`
-相同的扫描管线（指纹、分类、目录根哈希、与上一快照的 diff）。
+`file`（`.zip`）。API 先完成中央目录预检并把原始包写入不可变对象存储，然后
+创建 `inputKind=zip` 的持久分析运行；worker 从对象读取并校验 SHA-256，在隔离
+临时目录中解压后执行统一扫描、图谱、审计、目标判定和可选 ADK 总结管线。
 
 - **幂等**：与所有 v1 写路由一致，必须携带 `Idempotency-Key`；重放时按第一次
   响应返回，并清理本次已解析的临时归档。
 - **安全上限**：zip ≤ 100 MB；解压后总字节 ≤ 200 MB；条目数 ≤ 10,000；单文件
   ≤ 50 MB（与扫描器 `maxBytes` 对齐）。超限返回 `413`。
-- **条目名防御**：`..` 段、绝对路径、Windows 盘符（`C:`）、NUL 字节、反斜杠
-  伪装与越出解压根的目标一律跳过并记入响应的 `upload.warnings`（不阻断其余
-  内容）；非 zip 载荷返回 `415`，空归档返回 `400`。
+- **条目名防御**：`..` 段、绝对路径、Windows 盘符（`C:`）、NUL 字节、反斜杠、
+  符号链接、异常压缩比和声明大小不一致都会阻断载荷；非 zip 返回 `415`，空归档
+  返回 `400`。
 - **临时目录**：解压在系统临时目录进行，扫描完成或失败后立即递归清理，zip
   内容不落库（只保留指纹化的快照）。
-- **响应 201**：`{ snapshot, changes, upload }`。`snapshot` 与现有扫描快照同构
-  （`fileCount`、`directoryRootHash`、`baseline`）；`upload` 携带文件名、
-  SHA-256、解压统计与 `warnings`。
+- **响应 202**：`{ run, source }`，随后通过 analysis-runs API 观察真实阶段状态。
+  响应不返回文件正文、绝对路径或内部 object key。
 
 解压根通过 `allowedRoot` 传入扫描器，不依赖 `LABLINEAGE_SCAN_ROOT` 白名单——
 该白名单约束的是"任意服务器路径扫描"，而解压目录是系统为本次上传创建的受控

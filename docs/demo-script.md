@@ -1,43 +1,35 @@
 # Competition demo script
 
-The console UI now defaults to Chinese with an EN/中文 toggle in the header;
-UI names below carry both languages.
+Target length: 6–8 minutes. Use a pre-authorized sandbox GitHub repository or a
+Collector fixture with no private research data.
 
-1. Run `npm install --ignore-scripts`, `npm run seed`, then `npm run dev`.
-2. Open <http://localhost:5173> and show the seeded 相变研究（Phase Transition Study）project.
-3. Open **Lineage Explorer（溯源图谱）**, select `fig3.png`, and show the recorded
-   run, code, dataset, parameters, environment, and evidence identifiers.
-4. Open **Guardian Agent（守护代理）** and ask:
-   `fig3.png 是怎么生成的？当前能否复现？请区分事实、推断和缺失项，并列出 evidence_id。`
-5. Expand the execution trace. Point out deterministic routing, parallel
-   evidence retrieval, the bounded evidence-completion loop, read-only tool
-   calls, lifecycle correlation, token usage, and elapsed time.
-6. State the system boundary explicitly: **the model explains and interacts;
-   deterministic services own facts, hashes, evidence, and R0–R4 levels.**
-7. Show the retained `lablineage.agent-eval.v2` artifact for the same commit:
-   route accuracy, tool-selection accuracy, evidence citation rate, sensitive
-   leakage rate, P95 latency, tokens, and estimated cost.
-8. Open **Directory Diff（目录差异）**, scan an allowed demo directory, change one
-   file, scan again, and show that a move candidate is not presented as a fact.
-8b. Open **Upload Center（上传中心）** and drag a project `.zip` in: the archive is
-    extracted, scanned, and fingerprinted on the server (path-traversal entries
-    are skipped), and the new snapshot diff shows up in **Directory Diff（目录差异）**.
-    JSON manifests still follow the validated manifest import path.
-8c. In **Guardian Agent（守护代理）**, ask the agent to analyze the uploaded project
-    (`分析这个项目，生成谱系`): it lists the scanned files, infers a 代码→数据→输出
-    candidate chain, and renders a JSON candidate block. Click
-    **采纳为推断谱系（Adopt inferred lineage）** — the deterministic service
-    validates the candidates against the snapshot and adds them as dashed
-    inferred edges in **Lineage Explorer（溯源图谱）**, where an auditor can
-    confirm them into facts via the existing review flow.
-9. Trigger a reproducibility audit and show the R0–R4 breakdown. Emphasize that
-   R4 requires a successful controlled rerun with matching output hashes.
-10. Open **Handoff（交接工作区）**, generate a preview, and show that no email,
-    upload, delete, or permission change occurs without an explicit
-    confirmation path.
-11. Show the Cloud Run deployment artifact for the same commit, including the
-    immutable image, ready revision, health result, OIDC identity, and rollback
-    status. Do not claim deployment if the artifact is missing or skipped.
+1. Open **Deploy Project** and state the boundary: local source stays on the
+   workstation; Cloud Run receives signed, path-redacted evidence. ZIP is only a
+   fallback.
+2. Create a project with a concrete objective, two measurable success criteria,
+   and two expected outputs. Point out that the intent is versioned.
+3. Choose one source:
+   - Local Collector: generate the short code, run the prepared `pair`/`sync`
+     command, then show online status; or
+   - GitHub: connect the sandbox repository through the read-only GitHub App and
+     show the pinned commit SHA.
+4. Show that connection automatically creates a durable run. Walk through real
+   stages: ingest, scan, evidence graph, deterministic audit, objective
+   assessment, then ADK summary. Refresh the page to demonstrate URL/run restore.
+5. Open the report. For one criterion, follow its evidence IDs into the graph;
+   show a missing item as `not_assessable`, not a fabricated pass.
+6. Contrast the layers: deterministic services own hashes, evidence and R0–R4;
+   Google ADK uses routed specialist agents and read-only tools to explain the
+   result. Disable/omit the model in the prepared fallback to show the run becomes
+   `partial` while the authoritative report remains available.
+7. Show an inferred lineage edge and its human review boundary. A candidate is
+   not a fact until reviewed.
+8. Create a HandoffOrder to demonstrate that departing/receiver/reviewer/deadline
+   belong to each order rather than global settings. Preview but do not execute
+   external writes.
+9. Close with the two deployment profiles: fully local, or Cloud Run + Cloud SQL
+   + GCS + Cloud Tasks + Vertex AI while Collector stays local.
 
-The complete automated and human protocol is in
-[Guardian Agent evaluation and usability protocol](agent-evaluation.md).
+Before judging, capture the deployed commit SHA, image digest, readiness result,
+Collector/GitHub canary result, report checksum and live ADK evaluation artifact.
+If any external check was skipped, label it `not_run`.
