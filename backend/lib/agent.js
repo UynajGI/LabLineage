@@ -142,11 +142,30 @@ function createGuardianTools(store, projectId) {
 
   const handoffTool = new FunctionTool({
     name: 'preview_handoff',
-    description: 'Prepare a read-only handoff preview. It does not write Drive, Sheets, or Gmail.',
-    parameters: z.object({ includeOpenFindings: z.boolean().default(true) }),
-    execute: ({ includeOpenFindings }) => {
+    description: 'Prepare a read-only preview for ONE handoff order. Requires handoffId: call list_handoff_orders first when multiple orders may exist; never default to the first order. It does not write Drive, Sheets, or Gmail.',
+    parameters: z.object({
+      handoffId: z.string().min(1).describe('Handoff order id from list_handoff_orders'),
+      includeOpenFindings: z.boolean().default(true)
+    }),
+    execute: ({ handoffId, includeOpenFindings }) => {
       const state = store.get();
+      const order = (state.handoffOrders || []).find((item) => item.id === handoffId && item.projectId === projectId);
+      if (!order) {
+        return {
+          error: 'Handoff order not found for this project',
+          available: (state.handoffOrders || [])
+            .filter((item) => item.projectId === projectId)
+            .map((item) => ({ id: item.id, orderNumber: item.orderNumber, status: item.status }))
+        };
+      }
       return {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        departing: order.departingSubject,
+        receiving: order.receivingSubject,
+        recipient: order.receivingEmailSnapshot,
+        dueAt: order.dueAt,
         summary: projectSummary(state, projectId),
         findings: includeOpenFindings ? state.findings.filter((finding) => finding.projectId === projectId && finding.status === 'open') : [],
         requiresHumanConfirmation: true,
@@ -155,7 +174,51 @@ function createGuardianTools(store, projectId) {
     }
   });
 
-  return { summaryTool, lineageTool, findingsTool, changesTool, handoffTool };
+  const listHandoffOrdersTool = new FunctionTool({
+    name: 'list_handoff_orders',
+    description: 'List handoff orders for this project with id, order number, status, participants, due date and overdue flag. Read-only.',
+    parameters: z.object({}),
+    execute: () => {
+      const state = store.get();
+      return {
+        orders: (state.handoffOrders || [])
+          .filter((order) => order.projectId === projectId)
+          .map((order) => ({
+            id: order.id,
+            orderNumber: order.orderNumber,
+            status: order.status,
+            departingSubject: order.departingSubject,
+            receivingSubject: order.receivingSubject,
+            reviewerSubject: order.reviewerSubject,
+            dueAt: order.dueAt,
+            dueTimezone: order.dueTimezone,
+            overdue: order.dueAt ? new Date(order.dueAt).getTime() < Date.now() && !['completed', 'cancelled'].includes(order.status) : false,
+            version: order.version
+          }))
+      };
+    }
+  });
+
+  const getHandoffOrderTool = new FunctionTool({
+    name: 'get_handoff_order',
+    description: 'Return one handoff order with its tasks, reviews and append-only event timeline. Read-only.',
+    parameters: z.object({
+      handoffId: z.string().min(1).describe('Handoff order id from list_handoff_orders')
+    }),
+    execute: ({ handoffId }) => {
+      const state = store.get();
+      const order = (state.handoffOrders || []).find((item) => item.id === handoffId && item.projectId === projectId);
+      if (!order) return { error: 'Handoff order not found for this project' };
+      return {
+        ...order,
+        tasks: (state.handoffTasks || []).filter((task) => task.orderId === order.id),
+        reviews: (state.handoffReviews || []).filter((review) => review.orderId === order.id),
+        events: (state.handoffEvents || []).filter((event) => event.orderId === order.id)
+      };
+    }
+  });
+
+  return { summaryTool, lineageTool, findingsTool, changesTool, handoffTool, listHandoffOrdersTool, getHandoffOrderTool };
 }
 
 const TOOL_NAMES = [
@@ -164,6 +227,8 @@ const TOOL_NAMES = [
   'list_open_findings',
   'get_snapshot_changes',
   'preview_handoff',
+  'list_handoff_orders',
+  'get_handoff_order',
   'mcp_lineage_evidence',
   'mcp_repository_evidence'
 ];

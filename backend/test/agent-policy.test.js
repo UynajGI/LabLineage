@@ -17,9 +17,11 @@ test('Guardian agent exposes only the approved read-only tool set', () => {
   const agent = createGuardianAgent(store, 'project-a');
   const toolNames = agent.guardianToolNames.sort();
   assert.deepEqual(toolNames, [
+    'get_handoff_order',
     'get_lineage_graph',
     'get_project_summary',
     'get_snapshot_changes',
+    'list_handoff_orders',
     'list_open_findings',
     'mcp_lineage_evidence',
     'mcp_repository_evidence',
