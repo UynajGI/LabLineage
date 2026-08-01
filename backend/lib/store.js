@@ -86,6 +86,7 @@ export function makeDemoState() {
     sources: [],
     ingestionJobs: [],
     statusProposals: [],
+    lineageProposals: [],
     handoffReports: [],
     handoffOrders: [],
     handoffParticipants: [],

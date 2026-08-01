@@ -23,6 +23,13 @@ UI names below carry both languages.
     extracted, scanned, and fingerprinted on the server (path-traversal entries
     are skipped), and the new snapshot diff shows up in **Directory Diff（目录差异）**.
     JSON manifests still follow the validated manifest import path.
+8c. In **Guardian Agent（守护代理）**, ask the agent to analyze the uploaded project
+    (`分析这个项目，生成谱系`): it lists the scanned files, infers a 代码→数据→输出
+    candidate chain, and renders a JSON candidate block. Click
+    **采纳为推断谱系（Adopt inferred lineage）** — the deterministic service
+    validates the candidates against the snapshot and adds them as dashed
+    inferred edges in **Lineage Explorer（溯源图谱）**, where an auditor can
+    confirm them into facts via the existing review flow.
 9. Trigger a reproducibility audit and show the R0–R4 breakdown. Emphasize that
    R4 requires a successful controlled rerun with matching output hashes.
 10. Open **Handoff（交接工作区）**, generate a preview, and show that no email,

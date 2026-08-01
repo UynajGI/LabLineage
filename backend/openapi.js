@@ -46,6 +46,8 @@ const routeDefinitions = [
   ['post', '/v1/projects/{projectId}/nodes/{nodeId}/confirm', 'Confirm an inferred node'],
   ['post', '/v1/projects/{projectId}/snapshots', 'Scan an allowlisted server directory'],
   ['post', '/v1/projects/{projectId}/archives', 'Upload a project archive (zip) and scan it'],
+  ['post', '/v1/projects/{projectId}/lineage-proposals', 'Apply an agent-inferred lineage proposal'],
+  ['get', '/v1/projects/{projectId}/lineage-proposals', 'List lineage proposals for a project'],
   ['get', '/v1/projects/{projectId}/changes', 'Read latest project changes'],
   ['get', '/v1/projects/{projectId}/snapshots', 'List project snapshots'],
   ['get', '/v1/projects/{projectId}/snapshots/{snapshotId}/diff', 'Read a snapshot diff'],
@@ -124,6 +126,44 @@ const requestSchemaByRoute = {
     required: ['file'],
     properties: {
       file: { type: 'string', format: 'binary', description: 'Project archive in .zip format' }
+    }
+  },
+  'post /v1/projects/{projectId}/lineage-proposals': {
+    type: 'object',
+    additionalProperties: false,
+    required: ['nodes', 'edges'],
+    properties: {
+      nodes: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 100,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['pathToken', 'kind'],
+          properties: {
+            pathToken: { type: 'string', minLength: 1 },
+            kind: { type: 'string', enum: ['Project', 'CodeVersion', 'Dataset', 'ParameterSet', 'Environment', 'Run', 'Figure', 'Conclusion', 'Script', 'Data', 'Output'] },
+            label: { type: 'string', minLength: 1, maxLength: 200 }
+          }
+        }
+      },
+      edges: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 200,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['source', 'target', 'relation'],
+          properties: {
+            source: { type: 'string', minLength: 1 },
+            target: { type: 'string', minLength: 1 },
+            relation: { type: 'string', enum: ['executed_as', 'used_input', 'used_parameter_set', 'used_environment', 'generated', 'supports'] }
+          }
+        }
+      },
+      rationale: { type: 'string', maxLength: 2000 }
     }
   },
   'post /v1/projects/{projectId}/agent/conversations': {

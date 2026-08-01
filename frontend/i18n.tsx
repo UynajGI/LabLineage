@@ -148,6 +148,12 @@ const translations: Record<string, { en: string; zh: string }> = {
   'Archive scan failed.': { en: 'Archive scan failed.', zh: '压缩包扫描失败。' },
   'Archives are limited to 100 MB.': { en: 'Archives are limited to 100 MB.', zh: '压缩包上限为 100 MB。' },
   'Skipped {count} unsafe archive entries.': { en: 'Skipped {count} unsafe archive entries.', zh: '已跳过 {count} 个不安全的压缩包条目。' },
+  'Lineage candidates': { en: 'Lineage candidates', zh: '谱系推断候选' },
+  'Adopt inferred lineage': { en: 'Adopt inferred lineage', zh: '采纳为推断谱系' },
+  'Adopting…': { en: 'Adopting…', zh: '采纳中…' },
+  'Adopted': { en: 'Adopted', zh: '已采纳' },
+  'Adopted {nodes} nodes, {edges} edges as inferred lineage (requires human review).': { en: 'Adopted {nodes} nodes, {edges} edges as inferred lineage (requires human review).', zh: '已采纳 {nodes} 个节点、{edges} 条边为推断谱系（需人工确认）。' },
+  'Appears in Lineage Explorer as inferred; confirm there to make it fact.': { en: 'Appears in Lineage Explorer as inferred; confirm there to make it fact.', zh: '已显示在溯源图谱中（推断样式），可在图谱中确认后成为事实。' },
 
   // ---- SecurityAudit ----
   'Security summary unavailable': { en: 'Security summary unavailable', zh: '安全摘要不可用' },

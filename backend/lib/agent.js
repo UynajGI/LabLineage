@@ -18,7 +18,7 @@ import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { z } from 'zod';
 import { GuardianLifecyclePlugin } from './agent-lifecycle-plugin.js';
 import { GuardianSessionService } from './agent-session-service.js';
-import { diffSnapshots } from './scanner.js';
+import { diffSnapshots, materializeSnapshotIndex } from './scanner.js';
 import { projectSummary } from './store.js';
 
 const SYSTEM_INSTRUCTION = `
@@ -140,6 +140,30 @@ function createGuardianTools(store, projectId) {
     }
   });
 
+  const listProjectFilesTool = new FunctionTool({
+    name: 'list_project_files',
+    description: 'List files from the latest project snapshot with path tokens, kinds and redacted text snippets. Read-only. Call this before inferring project lineage.',
+    parameters: z.object({}),
+    execute: () => {
+      const state = store.get();
+      const latest = state.snapshots.filter((snapshot) => snapshot.projectId === projectId).at(-1);
+      if (!latest) return { found: false, message: 'No snapshot yet: scan a directory or upload a project archive first' };
+      const files = materializeSnapshotIndex(latest).files || [];
+      return {
+        found: true,
+        fileCount: files.length,
+        shown: Math.min(files.length, 60),
+        files: files.slice(0, 60).map((file) => ({
+          pathToken: file.pathToken,
+          kind: file.kind,
+          extension: file.extension,
+          sizeBytes: file.sizeBytes,
+          textSnippet: typeof file.textSnapshot === 'string' ? file.textSnapshot.slice(0, 800) : null
+        }))
+      };
+    }
+  });
+
   const handoffTool = new FunctionTool({
     name: 'preview_handoff',
     description: 'Prepare a read-only preview for ONE handoff order. Requires handoffId: call list_handoff_orders first when multiple orders may exist; never default to the first order. It does not write Drive, Sheets, or Gmail.',
@@ -218,7 +242,7 @@ function createGuardianTools(store, projectId) {
     }
   });
 
-  return { summaryTool, lineageTool, findingsTool, changesTool, handoffTool, listHandoffOrdersTool, getHandoffOrderTool };
+  return { summaryTool, lineageTool, findingsTool, changesTool, listProjectFilesTool, handoffTool, listHandoffOrdersTool, getHandoffOrderTool };
 }
 
 const TOOL_NAMES = [
@@ -265,6 +289,7 @@ function mcpToolset(mcpUrl, mcpToken, toolsets) {
 export function routeGuardianMessage(message) {
   if (/(handoff|交接|移交|接收人|交付|gmail|drive|邮件草稿)/i.test(message)) return 'handoff';
   if (/(audit|审计|复现|reproduc|finding|风险|冲突|缺失|完整性|R[0-4])/i.test(message)) return 'audit';
+  if (/(谱系|lineage|分析.*项目|生成.*谱系|推断.*关系|数据流|pipeline|文件关系)/i.test(message)) return 'lineage';
   return 'evidence';
 }
 
@@ -274,7 +299,7 @@ function messageFromContext(context) {
 
 export function createGuardianAgent(store, projectId, { mcpUrl, mcpToken } = {}) {
   const model = configuredModel();
-  const { summaryTool, lineageTool, findingsTool, changesTool, handoffTool } =
+  const { summaryTool, lineageTool, findingsTool, changesTool, listProjectFilesTool, handoffTool } =
     createGuardianTools(store, projectId);
   const mcpToolsets = [];
 
@@ -406,13 +431,38 @@ R4 只能由成功受控重跑且输出哈希匹配证明。`,
     generateContentConfig: { temperature: 0.1 }
   });
 
+  const lineageInferenceAgent = new LlmAgent({
+    name: 'LineageInferenceAgent',
+    description: 'Infers project lineage candidates from snapshot files.',
+    model,
+    instruction: `${SYSTEM_INSTRUCTION}
+
+你是谱系推断器。当用户要求分析项目结构、生成或推断谱系时：
+1. 先调用 list_project_files 获取最新快照的文件清单与脱敏文本片段。
+2. 基于内容推断 代码→数据→参数→环境→输出 的关系链（例如：脚本生成图、脚本读取数据、参数/配置文件、环境锁文件）。
+3. 只使用 list_project_files 返回值中逐字出现的 pathToken；relation 只能取 executed_as / used_input / used_parameter_set / used_environment / generated / supports；kind 只能取 Project / CodeVersion / Dataset / ParameterSet / Environment / Run / Figure / Conclusion / Script / Data / Output。
+4. 输出一个 JSON 代码块（唯一一个），格式：
+\`\`\`json
+{
+  "rationale": "一段中文解释推断依据",
+  "nodes": [{"pathToken": "analysis/run.py", "kind": "CodeVersion", "label": "run.py"}],
+  "edges": [{"source": "analysis/run.py", "target": "output/fig3.png", "relation": "generated"}]
+}
+\`\`\`
+5. 所有推断关系都是候选，不是事实；回复以“以上为推断候选，需人工确认后生效”结尾。`,
+    tools: [listProjectFilesTool],
+    outputKey: 'lineage_candidates',
+    generateContentConfig: { temperature: 0.1 }
+  });
+
   const rootAgent = new RoutedAgent({
     name: 'GuardianRootAgent',
-    description: 'Routes evidence, audit and handoff work to bounded specialist agents.',
+    description: 'Routes evidence, audit, handoff and lineage work to bounded specialist agents.',
     agents: {
       evidence: evidenceRetrieverAgent,
       audit: reproducibilityAuditorAgent,
-      handoff: handoffPlannerAgent
+      handoff: handoffPlannerAgent,
+      lineage: lineageInferenceAgent
     },
     router: (_agents, context) => routeGuardianMessage(messageFromContext(context))
   });

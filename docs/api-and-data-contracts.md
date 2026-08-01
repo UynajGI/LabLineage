@@ -138,6 +138,27 @@ RepositorySnapshot、evidence 与 lineage edge。原始本地路径和内部允�
 该白名单约束的是"任意服务器路径扫描"，而解压目录是系统为本次上传创建的受控
 临时目录。生产环境同样适用（`redactPaths` 与 `LABLINEAGE_PATH_SALT` 生效）。
 
+## 谱系推断候选契约
+
+`POST /v1/projects/{projectId}/lineage-proposals` 接收 Guardian Agent 对项目
+文件推断的谱系候选（`nodes` + `edges`），由确定性服务校验后落库为**推断**
+节点/边，不改变任何既有事实：
+
+- **节点**必须引用最新扫描快照中真实存在的 `pathToken`（文件指纹即证据）；
+  `kind` 限 Project / CodeVersion / Dataset / ParameterSet / Environment / Run /
+  Figure / Conclusion / Script / Data / Output。
+- **边**的 `relation` 限 executed_as / used_input / used_parameter_set /
+  used_environment / generated / supports；`source`/`target` 必须是快照文件或
+  本批节点。校验失败返回 `400`；项目尚无快照返回 `409`。
+- **幂等**：复用 `Idempotency-Key` 重放；重复提交去重（同节点复用、同边跳过）。
+- **落库形态**：节点 `confidence=inferred`、`status=inferred`；证据为
+  `file_fingerprint` 记录，payload 只含 pathToken（相对 token，生产为 `pth_`
+  哈希）与 `contentHash`，**不含绝对路径**。
+- 推断边可走现有 `POST /v1/lineage-edges/{edgeId}/review` 审计流程，确认后
+  升级为事实（`human_verified`）。
+- `GET /v1/projects/{projectId}/lineage-proposals` 返回历史候选摘要
+  （proposalId / 来源 / 节点边计数 / 时间）。
+
 ## 导入载荷对象
 
 导入任务的原始 JSON 不再存入 `application_state` 或规范化业务表。任务只保存

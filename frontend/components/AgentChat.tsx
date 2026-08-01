@@ -34,6 +34,29 @@ function renderText(text: string) {
   ));
 }
 
+interface LineageCandidate {
+  rationale?: string;
+  nodes: Array<{ pathToken: string; kind: string; label?: string }>;
+  edges: Array<{ source: string; target: string; relation: string }>;
+}
+
+function extractLineageCandidate(content: string): LineageCandidate | null {
+  const match = content.match(/```json\s*([\s\S]*?)```/u);
+  if (!match) return null;
+  try {
+    const parsed = JSON.parse(match[1]);
+    if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return null;
+    if (parsed.nodes.length === 0 || parsed.edges.length === 0) return null;
+    return {
+      rationale: typeof parsed.rationale === 'string' ? parsed.rationale : '',
+      nodes: parsed.nodes,
+      edges: parsed.edges
+    };
+  } catch {
+    return null;
+  }
+}
+
 export const AgentChat: React.FC = () => {
   const { t } = useI18n();
   const [messages, setMessages] = useState<Message[]>([{
@@ -43,6 +66,7 @@ export const AgentChat: React.FC = () => {
   }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [adoptState, setAdoptState] = useState<Record<string, 'idle' | 'applying' | 'done' | 'error'>>({});
   const [conversations, setConversations] = useState<AgentConversation[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -130,6 +154,30 @@ export const AgentChat: React.FC = () => {
       }]);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function adoptLineage(messageId: string, candidate: LineageCandidate) {
+    setAdoptState((current) => ({ ...current, [messageId]: 'applying' }));
+    try {
+      const result = await api.submitLineageProposal(candidate);
+      setAdoptState((current) => ({ ...current, [messageId]: 'done' }));
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: 'system',
+        content: t('Adopted {nodes} nodes, {edges} edges as inferred lineage (requires human review).', {
+          nodes: result.addedNodes,
+          edges: result.addedEdges
+        })
+      }]);
+    } catch (error) {
+      setAdoptState((current) => ({ ...current, [messageId]: 'error' }));
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: 'system',
+        content: error instanceof Error ? error.message : 'Failed to adopt lineage candidates.',
+        isError: true
+      }]);
     }
   }
 
@@ -263,6 +311,34 @@ export const AgentChat: React.FC = () => {
               }`}>
                 {renderText(message.content)}
               </div>
+              {(() => {
+                if (message.role !== 'agent' || message.isError) return null;
+                const candidate = extractLineageCandidate(message.content);
+                if (!candidate) return null;
+                const state = adoptState[message.id] || 'idle';
+                return (
+                  <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-4">
+                    <div className="flex items-center gap-2 text-sm font-medium text-violet-800">
+                      <GitBranch size={15} />
+                      <span>{t('Lineage candidates')}：{candidate.nodes.length} 节点 / {candidate.edges.length} 边</span>
+                    </div>
+                    {candidate.rationale && <p className="mt-1 text-xs text-slate-600">{candidate.rationale}</p>}
+                    <div className="mt-3 flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => void adoptLineage(message.id, candidate)}
+                        disabled={state === 'applying' || state === 'done'}
+                        className="rounded-md bg-violet-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {state === 'done' ? t('Adopted') : state === 'applying' ? t('Adopting…') : t('Adopt inferred lineage')}
+                      </button>
+                      {state === 'done' && (
+                        <span className="text-xs text-slate-500">{t('Appears in Lineage Explorer as inferred; confirm there to make it fact.')}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         ))}

@@ -28,6 +28,7 @@ import {
 } from './lib/scanner.js';
 import { projectSummary, stableEdgeId } from './lib/store.js';
 import { extractArchive, uploadArchiveMiddleware } from './lib/upload.js';
+import { LINEAGE_NODE_TYPES, LINEAGE_RELATIONS, prepareLineageProposal } from './lib/lineage-proposals.js';
 import {
   HandoffStateError,
   HandoffVersionConflictError,
@@ -1053,6 +1054,81 @@ export function buildApp() {
     res.status(201).json(proposal);
   });
 
+  app.post('/v1/projects/:projectId/lineage-proposals', requireProject, requireIdempotentWrite, async (req, res) => {
+    const input = z.object({
+      nodes: z.array(z.object({
+        pathToken: z.string().min(1),
+        kind: z.enum(LINEAGE_NODE_TYPES),
+        label: z.string().min(1).max(200).optional()
+      })).min(1).max(100),
+      edges: z.array(z.object({
+        source: z.string().min(1),
+        target: z.string().min(1),
+        relation: z.enum(LINEAGE_RELATIONS)
+      })).min(1).max(200),
+      rationale: z.string().max(2000).optional()
+    }).parse(req.body);
+    const latest = store.get().snapshots
+      .filter((snapshot) => snapshot.projectId === req.params.projectId)
+      .at(-1);
+    if (!latest) {
+      return res.status(409).json({ error: 'Scan or import a project first: lineage candidates require a snapshot with file evidence' });
+    }
+    const snapshotFiles = materializeSnapshotIndex(latest).files;
+    const proposal = prepareLineageProposal(req.params.projectId, input, snapshotFiles, req.actor.subject);
+    let addedNodes = 0;
+    let addedEdges = 0;
+    let addedEvidence = 0;
+    await store.update((state) => {
+      state.lineageProposals ||= [];
+      const existingProposal = state.lineageProposals.find((item) => item.proposalId === proposal.proposalId);
+      if (existingProposal) return;
+      for (const node of proposal.nodes) {
+        const index = state.nodes.findIndex((item) => item.id === node.id);
+        if (index >= 0) state.nodes[index] = node;
+        else { state.nodes.push(node); addedNodes += 1; }
+      }
+      for (const edge of proposal.edges) {
+        const exists = state.edges.some((item) => item.source === edge.source && item.target === edge.target && item.relation === edge.relation);
+        if (!exists) { state.edges.push(edge); addedEdges += 1; }
+      }
+      for (const evidence of proposal.evidence) {
+        const index = state.evidence.findIndex((item) => item.id === evidence.id);
+        if (index < 0) { state.evidence.push(evidence); addedEvidence += 1; }
+      }
+      state.lineageProposals.push(proposal);
+    });
+    await store.log({
+      action: 'apply_lineage_proposal',
+      actor: req.actor.subject,
+      resource: `project/${req.params.projectId}`,
+      details: `Applied inferred lineage proposal ${proposal.proposalId}: ${addedNodes} nodes, ${addedEdges} edges, ${addedEvidence} evidence records.`
+    });
+    res.status(201).json({
+      proposalId: proposal.proposalId,
+      addedNodes,
+      addedEdges,
+      addedEvidence,
+      nodes: proposal.nodes,
+      edges: proposal.edges,
+      confidence: 'inferred',
+      requiresHumanReview: true
+    });
+  });
+  app.get('/v1/projects/:projectId/lineage-proposals', requireProject, (req, res) => {
+    res.json((store.get().lineageProposals || [])
+      .filter((item) => item.projectId === req.params.projectId)
+      .map((item) => ({
+        proposalId: item.proposalId,
+        source: item.source,
+        actor: item.actor,
+        rationale: item.rationale,
+        nodeCount: item.nodes.length,
+        edgeCount: item.edges.length,
+        createdAt: item.createdAt
+      })));
+  });
+
   app.get('/v1/projects/:projectId/summary', requireProject, (req, res) => {
     res.json(projectSummary(store.get(), req.params.projectId));
   });
@@ -1639,7 +1715,10 @@ export function buildApp() {
   app.post('/v1/projects/:projectId/archives', requireProject, uploadArchiveMiddleware, requireIdempotentWrite, async (req, res) => {
     try {
       const extracted = await extractArchive(req.upload.zipPath, req.upload.tempDir);
-      const snapshot = await scanDirectory(extracted.destDir, { allowedRoot: extracted.destDir });
+      const snapshot = await scanDirectory(extracted.destDir, {
+        allowedRoot: extracted.destDir,
+        includeTextContent: true
+      });
       const changes = await persistSnapshot(req.params.projectId, snapshot);
       await store.log({ action: 'scan_upload', actor: req.actor.subject, resource: `project/${req.params.projectId}`, details: `Captured ${snapshot.fileCount} files from ${req.upload.filename}; ${changes.length} changes.` });
       res.status(201).json({

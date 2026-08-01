@@ -353,6 +353,24 @@ export const api = {
     return response.json() as Promise<UploadArchiveResult>;
   },
 
+  async submitLineageProposal(candidate: {
+    rationale?: string;
+    nodes: Array<{ pathToken: string; kind: string; label?: string }>;
+    edges: Array<{ source: string; target: string; relation: string }>;
+  }): Promise<{
+    proposalId: string;
+    addedNodes: number;
+    addedEdges: number;
+    addedEvidence: number;
+    confidence: string;
+    requiresHumanReview: boolean;
+  }> {
+    return request(`/v1/projects/${await projectId()}/lineage-proposals`, {
+      method: 'POST',
+      body: JSON.stringify(candidate)
+    });
+  },
+
   async listAgentConversations(): Promise<AgentConversation[]> {
     const result = await request<{ conversations: AgentConversation[] }>(
       `/v1/projects/${await projectId()}/agent/conversations`
