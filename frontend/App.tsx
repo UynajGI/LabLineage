@@ -1,5 +1,5 @@
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Network, AlertTriangle, MessageSquare, ShieldCheck, SendToBack, History, UploadCloud, Settings, ShieldAlert, ListChecks } from 'lucide-react';
+import React, { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { LayoutDashboard, Network, AlertTriangle, MessageSquare, ShieldCheck, SendToBack, History, UploadCloud, Settings, ShieldAlert, ListChecks, Rocket } from 'lucide-react';
 import { api } from './services/api';
 import { useI18n, translateKind, translateRole } from './i18n';
 import {
@@ -22,6 +22,7 @@ const SystemSetup = lazy(() => import('./components/SystemSetup').then((module) 
 const UploadCenter = lazy(() => import('./components/UploadCenter').then((module) => ({ default: module.UploadCenter })));
 const SecurityAudit = lazy(() => import('./components/SecurityAudit').then((module) => ({ default: module.SecurityAudit })));
 const ImplementationChecklist = lazy(() => import('./components/ImplementationChecklist').then((module) => ({ default: module.ImplementationChecklist })));
+const ProjectDeployment = lazy(() => import('./components/ProjectDeployment').then((module) => ({ default: module.ProjectDeployment })));
 
 const emptySummary: ProjectSummary = {
   id: '',
@@ -33,11 +34,11 @@ const emptySummary: ProjectSummary = {
 };
 const validRoutes = new Set([
   '/checklist', '/dashboard', '/lineage', '/snapshots', '/findings',
-  '/agent', '/handoff', '/upload', '/setup', '/security'
+  '/agent', '/handoff', '/deploy', '/upload', '/setup', '/security'
 ]);
 
 function routeFromHash(): string {
-  const route = window.location.hash.replace(/^#/, '') || '/checklist';
+  const route = (window.location.hash.replace(/^#/, '').split('?')[0] || '/checklist');
   return validRoutes.has(route) ? route : '/checklist';
 }
 
@@ -60,25 +61,39 @@ const App: React.FC = () => {
   const [currentRoute, setCurrentRoute] = useState(routeFromHash);
   const loadSequence = useRef(0);
 
-  const loadProject = async (requestedProjectId?: string) => {
+  const loadProject = useCallback(async (requestedProjectId?: string) => {
     const sequence = ++loadSequence.current;
     setLoadState('loading');
     setLoadError('');
     try {
-      const availableProjects = await api.listProjects();
-      if (!availableProjects.length) throw new Error(t('No project exists. Create a project in the API first.'));
+      const [availableProjects, capabilityStatus] = await Promise.all([api.refreshProjects(), api.getCapabilities()]);
+      if (!availableProjects.length) {
+        if (sequence !== loadSequence.current) return;
+        api.clearProjectSelection();
+        setProjects([]);
+        setSummary(emptySummary);
+        setNodes([]);
+        setEdges([]);
+        setFindings([]);
+        setFileChanges([]);
+        setSnapshots([]);
+        setAuditEvents([]);
+        setActor(capabilityStatus.actor);
+        setLoadState('connected');
+        if (capabilityStatus.actor.roles.includes('admin')) window.location.hash = '#/deploy';
+        return;
+      }
       const stored = localStorage.getItem('lablineage.activeProjectId');
       const target = requestedProjectId ||
         (stored && availableProjects.some((project) => project.id === stored) ? stored : availableProjects[0].id);
       api.selectProject(target);
-      const [projectSummary, lineage, currentFindings, changes, snapshotHistory, events, capabilityStatus] = await Promise.all([
+      const [projectSummary, lineage, currentFindings, changes, snapshotHistory, events] = await Promise.all([
         api.getProjectSummary(),
         api.getLineage(),
         api.getFindings(),
         api.getFileChanges(),
         api.getSnapshots(),
-        api.getAuditEvents(),
-        api.getCapabilities()
+        api.getAuditEvents()
       ]);
       if (sequence !== loadSequence.current) return;
       setProjects(availableProjects);
@@ -96,7 +111,7 @@ const App: React.FC = () => {
       setLoadError(error instanceof Error ? error.message : t('Backend request failed'));
       setLoadState('error');
     }
-  };
+  }, [t]);
 
   useEffect(() => {
     let active = true;
@@ -118,13 +133,13 @@ const App: React.FC = () => {
       active = false;
       loadSequence.current += 1;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadProject, t]);
 
   useEffect(() => {
     const updateRoute = () => {
       const route = routeFromHash();
-      if (window.location.hash !== `#${route}`) {
+      const rawRoute = window.location.hash.replace(/^#/, '').split('?')[0];
+      if (rawRoute !== route) {
         window.history.replaceState({}, document.title, `#${route}`);
       }
       setCurrentRoute(route);
@@ -145,13 +160,17 @@ const App: React.FC = () => {
   ];
 
   const adminNavItems = [
-    { path: '/upload', label: t('Upload Center'), icon: <UploadCloud size={20} />, requiredRole: 'editor' },
+    { path: '/deploy', label: t('Deploy Project'), icon: <Rocket size={20} /> },
+    { path: '/upload', label: t('Manifest Import'), icon: <UploadCloud size={20} />, requiredRole: 'editor' },
     { path: '/setup', label: t('System Setup'), icon: <Settings size={20} />, requiredRole: 'admin' },
     { path: '/security', label: t('Security & Audit'), icon: <ShieldAlert size={20} />, requiredRole: 'admin' },
   ];
   const roleRank: Record<string, number> = { viewer: 10, auditor: 20, editor: 30, admin: 40 };
   const actorRank = Math.max(0, ...actor.roles.map((role) => roleRank[role] || 0));
-  const visibleAdminNavItems = adminNavItems.filter((item) => actorRank >= roleRank[item.requiredRole]);
+  const visibleAdminNavItems = adminNavItems.filter((item) => actorRank >= roleRank[item.requiredRole || 'viewer']);
+  const refreshSelectedProject = useCallback(async (projectId: string) => {
+    await loadProject(projectId);
+  }, [loadProject]);
   const accessDenied = (
     <div className="rounded-lg border border-red-200 bg-red-50 p-8 text-center">
       <h2 className="text-xl font-bold text-red-900">{t('Access denied')}</h2>
@@ -182,6 +201,14 @@ const App: React.FC = () => {
         </div>
       );
       case '/handoff': return <HandoffView />;
+      case '/deploy': return (
+        <ProjectDeployment
+          activeProjectId={summary.id}
+          actorRoles={actor.roles}
+          onProjectSelected={refreshSelectedProject}
+          onAnalysisCompleted={refreshSelectedProject}
+        />
+      );
       case '/upload': return actorRank >= roleRank.editor ? <UploadCenter /> : accessDenied;
       case '/setup': return actorRank >= roleRank.admin ? <SystemSetup /> : accessDenied;
       case '/security': return actorRank >= roleRank.admin ? <SecurityAudit events={auditEvents} /> : accessDenied;
@@ -193,7 +220,7 @@ const App: React.FC = () => {
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden">
         <div className={`${loadState === 'error' ? 'bg-red-700 text-white' : loadState === 'connected' ? 'bg-emerald-700 text-white' : 'bg-amber-500 text-amber-950'} text-xs font-bold px-4 py-1 text-center flex justify-center items-center space-x-2 z-50`}>
           <AlertTriangle size={14} />
-          <span>{loadState === 'connected' ? 'LIVE API / 真实后端数据' : loadState === 'loading' ? '正在连接 Guardian API…' : `API 连接失败：${loadError}`}</span>
+          <span>{loadState === 'connected' ? t('Live API data') : loadState === 'loading' ? t('Connecting to Guardian API…') : t('API connection failed: {error}', { error: loadError })}</span>
         </div>
 
         <div className="flex flex-1 overflow-hidden">

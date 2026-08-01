@@ -251,3 +251,228 @@ export interface SetupConfig {
   reviewerEmail?: string;
   handoffDueDate?: string;
 }
+
+export interface ProjectSuccessCriterion {
+  id: string;
+  intentId: string;
+  projectId: string;
+  description: string;
+  required: boolean;
+  sortOrder: number;
+  createdAt: string;
+}
+
+export interface ProjectKeyOutput {
+  id: string;
+  intentId: string;
+  projectId: string;
+  name: string;
+  kind: 'artifact' | 'code' | 'dataset' | 'figure' | 'report' | 'environment' | 'other';
+  expectedPathHint: string | null;
+  required: boolean;
+  sortOrder: number;
+  createdAt: string;
+}
+
+export interface ProjectIntent {
+  id: string;
+  projectId: string;
+  version: number;
+  objective: string;
+  constraints: string[];
+  legacy: boolean;
+  createdBySubject: string;
+  createdAt: string;
+  successCriteria: ProjectSuccessCriterion[];
+  keyOutputs: ProjectKeyOutput[];
+}
+
+export interface CreateProjectInput {
+  name: string;
+  slug?: string;
+  objective: string;
+  successCriteria: Array<{ description: string; required: boolean }>;
+  keyOutputs: Array<{
+    name: string;
+    kind: ProjectKeyOutput['kind'];
+    expectedPathHint?: string;
+    required: boolean;
+  }>;
+  constraints: string[];
+}
+
+export interface ProjectDetail {
+  id: string;
+  name: string;
+  slug: string;
+  createdAt: string;
+  updatedAt: string;
+  currentIntentVersion: number;
+  intent: ProjectIntent;
+}
+
+export interface ProjectSource {
+  id: string;
+  projectId: string;
+  name: string;
+  type: 'filesystem' | 'github' | 'google_drive' | 'offline_bundle';
+  networkMode: string;
+  status: 'active' | 'disconnected' | 'pending' | 'error';
+  collectorId?: string;
+  exportPolicy?: {
+    rawFileContent: boolean;
+    rawPaths: boolean;
+    signedBundlesRequired: boolean;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CollectorPairing {
+  id: string;
+  projectId: string;
+  status: 'pending' | 'claimed' | 'expired';
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  collectorId?: string;
+  sourceId?: string;
+  code?: string;
+}
+
+export interface CollectorCredential {
+  id: string;
+  collectorId: string;
+  projectId: string;
+  sourceId: string;
+  pairingId: string;
+  publicKeyFingerprint: string;
+  status: 'active' | 'revoked';
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt?: string;
+}
+
+export type AnalysisRunStatus = 'queued' | 'ingesting' | 'scanning' | 'graphing' | 'auditing' | 'summarizing' | 'completed' | 'partial' | 'failed' | 'cancelled';
+
+export interface AnalysisRunStep {
+  id: string;
+  runId: string;
+  projectId: string;
+  name: 'ingest' | 'scan' | 'graph' | 'audit' | 'goal_coverage' | 'agent_summary' | 'finalize';
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled';
+  attempt: number;
+  errorCode?: string | null;
+  errorSummary?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  artifactRefs: AnalysisArtifactRef[];
+}
+
+export interface AnalysisArtifactRef {
+  kind: 'snapshot' | 'github_revision' | 'lineage_graph' | 'audit' | 'objective_assessment_draft' | 'agent_trace' | 'analysis_report';
+  id?: string;
+  sha?: string;
+  sha256?: string;
+  projectId?: string;
+  runId?: string;
+  traceId?: string;
+}
+
+export interface AnalysisRunEventPayload {
+  sourceId?: string | null;
+  sourceRevision?: string | null;
+  intentVersion?: number;
+  step?: AnalysisRunStep['name'];
+  attempt?: number;
+  nextStep?: AnalysisRunStep['name'] | null;
+  errorCode?: string;
+  recoverableSummaryFailure?: boolean;
+  fromStep?: AnalysisRunStep['name'];
+}
+
+export interface AnalysisRunEvent {
+  id: string;
+  runId: string;
+  projectId: string;
+  eventType: string;
+  actorSubject: string;
+  payload: AnalysisRunEventPayload;
+  createdAt: string;
+}
+
+export interface AnalysisRun {
+  id: string;
+  projectId: string;
+  intentVersionId: string;
+  intentVersion: number;
+  sourceId: string | null;
+  sourceRevision: string | null;
+  inputKind: 'collector_manifest' | 'github' | 'zip' | null;
+  inputSha256: string | null;
+  status: AnalysisRunStatus;
+  currentStep: AnalysisRunStep['name'] | null;
+  version: number;
+  attempts: number;
+  retryCount: number;
+  deterministicReady: boolean;
+  queuedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  steps: AnalysisRunStep[];
+  events: AnalysisRunEvent[];
+  report: { id: string; overallStatus: AssessmentStatus; coverageScore: number; createdAt: string } | null;
+}
+
+export type AssessmentStatus = 'supported' | 'partial' | 'missing' | 'conflicted' | 'not_assessable';
+
+export interface AssessmentResult {
+  id: string;
+  kind: 'criterion' | 'key_output';
+  label: string;
+  required: boolean;
+  sortOrder: number;
+  status: AssessmentStatus;
+  evidenceIds: string[];
+  conflictIds: string[];
+  reason: string;
+}
+
+export interface ObjectiveAssessmentDocument {
+  schemaVersion: 'lablineage.objective-assessment.v1';
+  intentVersionId: string;
+  intentVersion: number;
+  objective: string;
+  overallStatus: AssessmentStatus;
+  coverageScore: number;
+  criterionResults: AssessmentResult[];
+  keyOutputResults: AssessmentResult[];
+  findingIds: string[];
+  audit: { id: string; level: ReproducibilityLevel; score: number } | null;
+  missingEvidence: Array<{ resultId: string; reason: string }>;
+  conflicts: Array<{ resultId: string; findingIds: string[] }>;
+  limitations: string[];
+  runId: string;
+  projectId: string;
+  sourceId: string | null;
+  sourceRevision: string | null;
+  agentExplanation: string | null;
+  agentTraceId: string | null;
+  model: string | null;
+  agentStatus: 'available' | 'unavailable';
+  createdAt: string;
+}
+
+export interface ObjectiveAssessmentReport {
+  id: string;
+  runId: string;
+  projectId: string;
+  intentVersionId: string;
+  overallStatus: AssessmentStatus;
+  coverageScore: number;
+  sha256: string;
+  createdAt: string;
+  document: ObjectiveAssessmentDocument;
+}

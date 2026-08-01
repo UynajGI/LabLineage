@@ -9,6 +9,13 @@ import type {
   HandoffStatus,
   LineageEdge,
   LineageNode,
+  AnalysisRun,
+  CollectorCredential,
+  CollectorPairing,
+  CreateProjectInput,
+  ObjectiveAssessmentReport,
+  ProjectDetail,
+  ProjectSource,
   ProjectSummary,
   SecuritySummary,
   SnapshotSummary,
@@ -20,25 +27,6 @@ const API_ROOT = '';
 type CapabilitiesResponse = {
   actor: { subject: string; kind: string; roles: string[] };
   capabilities: Array<{ id: string; title: string; state: 'ready' | 'configured' | 'development' | 'not_configured'; detail: string }>;
-};
-export type UploadArchiveResult = {
-  snapshot: {
-    id: string;
-    fileCount: number;
-    directoryRootHash: string;
-    sourceLabel: string;
-    collectedAt: string;
-    baseline: boolean;
-  };
-  changes: unknown[];
-  upload: {
-    filename: string;
-    sha256: string;
-    sizeBytes: number;
-    extractedFiles: number;
-    extractedBytes: number;
-    warnings: string[];
-  };
 };
 let activeProjectId: string | null = null;
 let projectIdRequest: Promise<string> | null = null;
@@ -127,6 +115,89 @@ export const api = {
     activeProjectId = projectId;
     projectIdRequest = Promise.resolve(projectId);
     if (typeof localStorage !== 'undefined') localStorage.setItem('lablineage.activeProjectId', projectId);
+  },
+
+  clearProjectSelection() {
+    activeProjectId = null;
+    projectIdRequest = null;
+    if (typeof localStorage !== 'undefined') localStorage.removeItem('lablineage.activeProjectId');
+  },
+
+  async refreshProjects(): Promise<ProjectSummary[]> {
+    projectsRequest = null;
+    return this.listProjects();
+  },
+
+  async createProject(input: CreateProjectInput): Promise<ProjectDetail> {
+    const project = await request<ProjectDetail>('/v1/projects', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    });
+    projectsRequest = null;
+    this.selectProject(project.id);
+    return project;
+  },
+
+  async getProjectDetail(projectIdValue?: string): Promise<ProjectDetail> {
+    const id = projectIdValue || await projectId();
+    return request(`/v1/projects/${encodeURIComponent(id)}`);
+  },
+
+  async listProjectSources(projectIdValue?: string): Promise<ProjectSource[]> {
+    const id = projectIdValue || await projectId();
+    return request(`/v1/projects/${encodeURIComponent(id)}/sources`);
+  },
+
+  async createCollectorPairing(projectIdValue: string, expiresInSeconds = 600): Promise<CollectorPairing> {
+    return request(`/v1/projects/${encodeURIComponent(projectIdValue)}/collector-pairings`, {
+      method: 'POST',
+      body: JSON.stringify({ expiresInSeconds })
+    });
+  },
+
+  async listCollectors(projectIdValue: string): Promise<{ pairings: CollectorPairing[]; collectors: CollectorCredential[] }> {
+    return request(`/v1/projects/${encodeURIComponent(projectIdValue)}/collectors`);
+  },
+
+  async revokeCollector(projectIdValue: string, collectorId: string): Promise<CollectorCredential> {
+    return request(`/v1/projects/${encodeURIComponent(projectIdValue)}/collectors/${encodeURIComponent(collectorId)}/revoke`, {
+      method: 'POST',
+      body: JSON.stringify({ confirmation: 'REVOKE_COLLECTOR' })
+    });
+  },
+
+  async connectGitHubSource(projectIdValue: string, input: { repository: string; branch?: string }): Promise<{ sourceId: string; runId: string; statusUrl: string; idempotent: boolean }> {
+    return request(`/v1/projects/${encodeURIComponent(projectIdValue)}/sources/github`, {
+      method: 'POST',
+      body: JSON.stringify(input)
+    });
+  },
+
+  async listAnalysisRuns(projectIdValue: string): Promise<AnalysisRun[]> {
+    const result = await request<{ runs: AnalysisRun[] }>(`/v1/projects/${encodeURIComponent(projectIdValue)}/analysis-runs`);
+    return result.runs;
+  },
+
+  async getAnalysisRun(projectIdValue: string, runId: string, signal?: AbortSignal): Promise<AnalysisRun> {
+    return request(`/v1/projects/${encodeURIComponent(projectIdValue)}/analysis-runs/${encodeURIComponent(runId)}`, { signal });
+  },
+
+  async getAnalysisReport(projectIdValue: string, runId: string): Promise<ObjectiveAssessmentReport> {
+    return request(`/v1/projects/${encodeURIComponent(projectIdValue)}/analysis-runs/${encodeURIComponent(runId)}/report`);
+  },
+
+  async retryAnalysisRun(projectIdValue: string, run: AnalysisRun): Promise<AnalysisRun> {
+    return request(`/v1/projects/${encodeURIComponent(projectIdValue)}/analysis-runs/${encodeURIComponent(run.id)}/retry`, {
+      method: 'POST',
+      body: JSON.stringify({ expectedVersion: run.version, confirmation: 'RETRY_ANALYSIS_RUN' })
+    });
+  },
+
+  async cancelAnalysisRun(projectIdValue: string, run: AnalysisRun): Promise<AnalysisRun> {
+    return request(`/v1/projects/${encodeURIComponent(projectIdValue)}/analysis-runs/${encodeURIComponent(run.id)}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ expectedVersion: run.version, confirmation: 'CANCEL_ANALYSIS_RUN' })
+    });
   },
 
   async getCapabilities(): Promise<CapabilitiesResponse> {
@@ -334,11 +405,10 @@ export const api = {
     return request('/v1/manifests', { method: 'POST', body: JSON.stringify(manifest) });
   },
 
-  async uploadArchive(file: File): Promise<UploadArchiveResult> {
-    // multipart 上传：不能走 request()（它会强制 Content-Type: application/json）
+  async uploadArchiveForAnalysis(projectIdValue: string, file: File): Promise<{ sourceId: string; runId: string; statusUrl: string; idempotent: boolean }> {
     const form = new FormData();
     form.append('file', file);
-    const response = await fetch(`${API_ROOT}/v1/projects/${await projectId()}/archives`, {
+    const response = await fetch(`${API_ROOT}/v1/projects/${encodeURIComponent(projectIdValue)}/archives`, {
       method: 'POST',
       headers: {
         ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
@@ -350,7 +420,7 @@ export const api = {
       const payload = await response.json().catch(() => ({ error: response.statusText }));
       throw new Error(payload.error || `Upload failed (${response.status})`);
     }
-    return response.json() as Promise<UploadArchiveResult>;
+    return response.json() as Promise<{ sourceId: string; runId: string; statusUrl: string; idempotent: boolean }>;
   },
 
   async submitLineageProposal(candidate: {

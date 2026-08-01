@@ -160,7 +160,7 @@ export const SnapshotDiffView: React.FC<SnapshotDiffViewProps> = ({ changes, sna
                   <p className="text-sm font-medium text-slate-800 truncate" title={change.path}>
                     {change.path.split('/').pop()}
                   </p>
-                  <p className="text-xs text-slate-500 truncate">{change.path}</p>
+                  <p className="text-xs text-slate-600 truncate">{change.path}</p>
                 </div>
               </li>
             ))}
@@ -183,7 +183,7 @@ export const SnapshotDiffView: React.FC<SnapshotDiffViewProps> = ({ changes, sna
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-4">
+              <div className="flex-1 overflow-y-auto p-4" tabIndex={0} role="region" aria-label={t('Change details')}>
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div className="bg-slate-50 p-3 rounded border border-slate-200">

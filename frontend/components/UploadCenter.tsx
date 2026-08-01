@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { UploadCloud, FileArchive, CheckCircle2, AlertCircle, Loader2, ShieldCheck } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { AlertCircle, CheckCircle2, FileArchive, Loader2, ShieldCheck, UploadCloud } from 'lucide-react';
 import { api } from '../services/api';
 import { useI18n } from '../i18n';
 
@@ -7,167 +7,82 @@ export const UploadCenter: React.FC = () => {
   const { t } = useI18n();
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
-  const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'validating' | 'success' | 'error'>('idle');
-  const [progress, setProgress] = useState(0);
-  const [logs, setLogs] = useState<{msg: string, type: 'info'|'success'|'error'}[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [state, setState] = useState<'idle' | 'reading' | 'validating' | 'success' | 'error'>('idle');
+  const [logs, setLogs] = useState<Array<{ message: string; type: 'info' | 'success' | 'error' }>>([]);
+  const input = useRef<HTMLInputElement>(null);
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      setFile(e.dataTransfer.files[0]);
-    }
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      setFile(e.target.files[0]);
-    }
-  };
-
-  const addLog = (msg: string, type: 'info'|'success'|'error' = 'info') => {
-    setLogs(prev => [...prev, { msg, type }]);
-  };
-
-  const startUpload = async () => {
-    if (!file) return;
-    const isZip = /\.zip$/iu.test(file.name);
-    setUploadState('uploading');
+  const choose = (next?: File) => {
+    if (!next) return;
+    setFile(next);
+    setState('idle');
     setLogs([]);
-    setProgress(20);
+  };
+
+  const addLog = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    setLogs((current) => [...current, { message, type }]);
+  };
+
+  const importManifest = async () => {
+    if (!file) return;
+    setLogs([]);
     try {
-      if (isZip) {
-        if (file.size > 100 * 1024 * 1024) throw new Error(t('Archives are limited to 100 MB.'));
-        addLog(t('Uploading archive, extracting and scanning...'), 'info');
-        setProgress(55);
-        setUploadState('validating');
-        const result = await api.uploadArchive(file);
-        setProgress(100);
-        setUploadState('success');
-        addLog(t('Scanned {fileCount} files from {filename} ({extractedFiles} extracted).', {
-          fileCount: result.snapshot.fileCount,
-          filename: result.upload.filename,
-          extractedFiles: result.upload.extractedFiles
-        }), 'success');
-        if (result.upload.warnings.length > 0) {
-          addLog(t('Skipped {count} unsafe archive entries.', { count: result.upload.warnings.length }), 'info');
-        }
-      } else {
-        if (file.size > 5 * 1024 * 1024) throw new Error(t('Manifest exceeds the 5 MB API limit.'));
-        addLog(t('Reading manifest without executing embedded content...'), 'info');
-        const manifest = JSON.parse(await file.text());
-        setProgress(55);
-        setUploadState('validating');
-        addLog(t('Validating lablineage.manifest.v1 schema on the backend...'), 'info');
-        const result = await api.importManifest(manifest) as { bundleId: string; nodes: number; edges: number; evidence: number };
-        setProgress(100);
-        setUploadState('success');
-        addLog(t('Imported {nodes} nodes, {edges} edges and {evidence} evidence records from {bundleId}.', {
-          nodes: result.nodes,
-          edges: result.edges,
-          evidence: result.evidence,
-          bundleId: result.bundleId
-        }), 'success');
-      }
-    } catch (error) {
-      setUploadState('error');
-      addLog(error instanceof Error ? error.message : t(isZip ? 'Archive scan failed.' : 'Manifest import failed.'), 'error');
+      if (!/\.json$/iu.test(file.name)) throw new Error(t('Only manifest JSON is accepted on this legacy page.'));
+      if (file.size > 5 * 1024 * 1024) throw new Error(t('Manifest exceeds the 5 MB API limit.'));
+      setState('reading');
+      addLog(t('Reading manifest without executing embedded content...'));
+      const document = JSON.parse(await file.text());
+      setState('validating');
+      addLog(t('Validating lablineage.manifest.v1 schema on the backend...'));
+      const result = await api.importManifest(document) as { bundleId: string; nodes: number; edges: number; evidence: number };
+      setState('success');
+      addLog(t('Imported {nodes} nodes, {edges} edges and {evidence} evidence records from {bundleId}.', {
+        nodes: result.nodes, edges: result.edges, evidence: result.evidence, bundleId: result.bundleId
+      }), 'success');
+    } catch (reason) {
+      setState('error');
+      addLog(reason instanceof Error ? reason.message : t('Manifest import failed.'), 'error');
     }
   };
+
+  const working = state === 'reading' || state === 'validating';
 
   return (
-    <div className="space-y-6 h-full flex flex-col max-w-4xl mx-auto">
+    <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-slate-800">{t('Upload Center')}</h2>
-        <p className="text-slate-600 mt-1">{t('Import a project archive (.zip) or a validated manifest JSON.')}</p>
+        <h2 className="text-2xl font-bold text-slate-800">{t('Manifest Import')}</h2>
+        <p className="mt-1 text-slate-600">{t('Legacy import for a validated manifest JSON. Use Deploy Project for Local Collector, GitHub, or ZIP fallback.')}</p>
+        <a href="#/deploy" className="mt-3 inline-flex rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">{t('Open Deploy Project')}</a>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-8">
+      <div className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
+        <div
+          className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-12 transition-colors ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-slate-50 hover:bg-slate-100'}`}
+          onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={(event) => { event.preventDefault(); setIsDragging(false); choose(event.dataTransfer.files[0]); }}
+          onClick={() => input.current?.click()}
+          onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') input.current?.click(); }}
+          role="button"
+          tabIndex={0}
+        >
+          <input ref={input} type="file" className="hidden" accept=".json,application/json" onChange={(event) => choose(event.target.files?.[0])} />
+          <UploadCloud size={48} className={`mb-4 ${isDragging ? 'text-blue-500' : 'text-slate-400'}`} />
+          <p className="text-lg font-medium text-slate-700">{file?.name || t('Click or drag a manifest.json here')}</p>
+          <p className="mt-1 text-sm text-slate-500">{file ? `${(file.size / (1024 * 1024)).toFixed(2)} MB · ${t('Manifest JSON')}` : t('Maximum file size: 5 MB')}</p>
+        </div>
 
-        {uploadState === 'idle' && (
-          <div
-            className={`border-2 border-dashed rounded-xl p-12 flex flex-col items-center justify-center transition-colors cursor-pointer ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-slate-50 hover:bg-slate-100'}`}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <input type="file" ref={fileInputRef} className="hidden" accept=".json,.zip" onChange={handleFileSelect} />
-            <UploadCloud size={48} className={`mb-4 ${isDragging ? 'text-blue-500' : 'text-slate-400'}`} />
-            <p className="text-lg font-medium text-slate-700 mb-1">
-              {file ? file.name : t('Click or drag a project.zip or manifest.json here')}
-            </p>
-            <p className="text-sm text-slate-500">
-              {file
-                ? `${(file.size / (1024 * 1024)).toFixed(2)} MB · ${/\.zip$/iu.test(file.name) ? t('Project archive') : t('Manifest JSON')}`
-                : t('Maximum file size: 5 MB')}
-            </p>
-          </div>
-        )}
-
-        {uploadState !== 'idle' && (
-          <div className="space-y-6">
-            <div className="flex items-center space-x-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
-              <FileArchive size={32} className="text-blue-500" />
-              <div className="flex-1">
-                <div className="flex justify-between mb-1">
-                  <span className="font-medium text-slate-800">{file?.name || 'handoff-bundle.tar.zst'}</span>
-                  <span className="text-sm text-slate-500">{progress}%</span>
-                </div>
-                <div className="w-full bg-slate-200 rounded-full h-2">
-                  <div className={`h-2 rounded-full transition-all duration-300 ${uploadState === 'success' ? 'bg-green-500' : uploadState === 'error' ? 'bg-red-500' : 'bg-blue-600'}`} style={{ width: `${progress}%` }}></div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-slate-900 rounded-lg p-4 font-mono text-sm h-64 overflow-y-auto space-y-2">
-              {logs.map((log, idx) => (
-                <div key={idx} className="flex items-start space-x-2 animate-in fade-in">
-                  {log.type === 'info' && <Loader2 size={14} className="text-blue-400 animate-spin mt-0.5 flex-shrink-0" />}
-                  {log.type === 'success' && <CheckCircle2 size={14} className="text-green-400 mt-0.5 flex-shrink-0" />}
-                  {log.type === 'error' && <AlertCircle size={14} className="text-red-400 mt-0.5 flex-shrink-0" />}
-                  <span className={log.type === 'error' ? 'text-red-400' : 'text-slate-300'}>{log.msg}</span>
-                </div>
-              ))}
-              {uploadState === 'validating' && <div className="animate-pulse text-slate-500">_</div>}
+        {state !== 'idle' && (
+          <div className="mt-6 space-y-4" aria-live="polite">
+            <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4"><FileArchive className="text-blue-500" /><span className="font-medium text-slate-800">{file?.name}</span><span className="ml-auto text-sm text-slate-500">{t(state)}</span></div>
+            <div className="h-56 space-y-2 overflow-y-auto rounded-lg bg-slate-900 p-4 font-mono text-sm">
+              {logs.map((log, index) => <div key={`${index}-${log.message}`} className="flex items-start gap-2">{log.type === 'info' && <Loader2 size={14} className="mt-0.5 animate-spin text-blue-400" />}{log.type === 'success' && <CheckCircle2 size={14} className="mt-0.5 text-green-400" />}{log.type === 'error' && <AlertCircle size={14} className="mt-0.5 text-red-400" />}<span className={log.type === 'error' ? 'text-red-400' : 'text-slate-300'}>{log.message}</span></div>)}
             </div>
           </div>
         )}
 
-        <div className="mt-8 flex justify-between items-center">
-          <div className="flex items-center space-x-2 text-sm text-slate-500">
-            <ShieldCheck size={16} />
-            <span>{t('Archives are extracted, scanned and fingerprinted on the server before import.')}</span>
-          </div>
-
-          {uploadState === 'idle' && (
-            <button
-              onClick={startUpload}
-              disabled={!file}
-              className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {t('Upload & Validate')}
-            </button>
-          )}
-
-          {(uploadState === 'success' || uploadState === 'error') && (
-            <button
-              onClick={() => { setUploadState('idle'); setFile(null); setLogs([]); }}
-              className="px-6 py-2 bg-slate-800 text-white rounded-md font-medium hover:bg-slate-700"
-            >
-              {uploadState === 'success' ? t('Upload Another') : t('Try Again')}
-            </button>
-          )}
+        <div className="mt-8 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-2 text-sm text-slate-500"><ShieldCheck size={16} /><span>{t('Signed manifests are validated without executing embedded content.')}</span></div>
+          <button type="button" onClick={() => void importManifest()} disabled={!file || working} className="rounded-md bg-slate-900 px-6 py-2 font-medium text-white disabled:opacity-50">{working ? t('Validating…') : t('Import Manifest')}</button>
         </div>
       </div>
     </div>
