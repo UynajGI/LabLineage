@@ -105,6 +105,33 @@ test('PostgreSQL projection and RLS isolate a least-privilege runtime role', {
     );
     assert.equal(projected.rows[0].count, 1);
 
+    await store.update((state) => {
+      state.snapshots.push({
+        id: 'snapshot-jsonb-order',
+        projectId: 'project-projection',
+        collectedAt: new Date().toISOString(),
+        collectorVersion: 'postgres-integration@1',
+        fileCount: 1,
+        warnings: [],
+        files: [{
+          pathToken: 'reports/canary.json',
+          sizeBytes: 42,
+          contentHash: `sha256:${'b'.repeat(64)}`,
+          fingerprint: { value: 'fixture', algorithm: 'sha256', strength: 'strong' }
+        }]
+      });
+    });
+    await store.refresh();
+    await store.update(() => {});
+    const projectedSnapshots = await admin.query(
+      `SELECT count(*)::int AS count
+       FROM snapshots s
+       JOIN projects p ON p.id=s.project_id
+       WHERE s.tenant_id=$1 AND p.settings->>'externalId'='project-projection'`,
+      [tenantA]
+    );
+    assert.equal(projectedSnapshots.rows[0].count, 1, 'JSONB key ordering must not change a snapshot hash');
+
     let resumeUpdate;
     let updateEntered;
     const entered = new Promise((resolve) => { updateEntered = resolve; });

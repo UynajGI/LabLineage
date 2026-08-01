@@ -36,3 +36,26 @@ test('normalized projection writes projects, artifacts, evidence and lineage', a
   assert.match(sql, /INSERT INTO evidence/);
   assert.match(sql, /INSERT INTO lineage_edges/);
 });
+
+test('snapshot projection hash is stable across JSONB key ordering', async () => {
+  const statements = [];
+  const client = { query: async (sql, values) => { statements.push({ sql, values }); return { rowCount: 1, rows: [] }; } };
+  const state = (file) => ({
+    projects: [{ id: 'p1', slug: 'p1', name: 'Project', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }],
+    nodes: [], evidence: [], edges: [], audits: [], findings: [], auditEvents: [],
+    snapshots: [{ id: 's1', projectId: 'p1', collectedAt: '2026-01-01T00:00:00Z', fileCount: 1, files: [file] }]
+  });
+  await syncNormalizedProjection(client, '11111111-1111-4111-8111-111111111111', state({
+    pathToken: 'reports/canary.json',
+    fingerprint: { value: 'fixture', algorithm: 'sha256', strength: 'strong' }
+  }));
+  await syncNormalizedProjection(client, '11111111-1111-4111-8111-111111111111', state({
+    fingerprint: { strength: 'strong', algorithm: 'sha256', value: 'fixture' },
+    pathToken: 'reports/canary.json'
+  }));
+  const hashes = statements
+    .filter((item) => /INSERT INTO snapshots/.test(item.sql))
+    .map((item) => item.values[3]);
+  assert.equal(hashes.length, 2);
+  assert.equal(hashes[0], hashes[1]);
+});
