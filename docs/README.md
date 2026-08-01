@@ -28,6 +28,7 @@ instructions.
 | Document | Audience | Use it for |
 |---|---|---|
 | [Operations runbook](operations-runbook.md) | On-call and platform teams | Deployment, health, backup, recovery, alerts, and incident response |
+| [Demo deployment](demo-deployment.md) | Competition team and judges | Cloud Run judge-demo deployment, evidence capture, cost, and cleanup |
 | [Release and supply chain](release-and-supply-chain.md) | Release engineers | SBOM, checksums, signing, promotion, rollback, and live-evaluation evidence |
 | [Threat model](threat-model.md) | Security reviewers | Threats, controls, validation methods, and external assurance boundaries |
 | [Dependency risk register](dependency-risk-register.md) | Maintainers and security reviewers | Accepted transitive risks, controls, and exit conditions |

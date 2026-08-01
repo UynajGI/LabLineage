@@ -23,6 +23,8 @@ RUN apt-get update \
     && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
       /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/pnpm /usr/local/bin/pnpx
 COPY --from=build --chown=lablineage:lablineage /app /app
+RUN chown lablineage:lablineage /app
+COPY --chown=lablineage:lablineage demo-scan /app/demo-scan
 USER lablineage
 EXPOSE 8788
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
