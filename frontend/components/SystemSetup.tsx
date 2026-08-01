@@ -37,7 +37,8 @@ export const SystemSetup: React.FC = () => {
     setMessage('');
     setError('');
     try {
-      await api.saveSetupConfig(config);
+      const { departingMemberEmail: _departing, receivingMemberEmail: _receiving, reviewerEmail: _reviewer, handoffDueDate: _dueDate, ...cleanConfig } = config;
+      await api.saveSetupConfig(cleanConfig);
       setMessage(t('Organization and handoff settings saved.'));
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : t('Unable to save setup'));
@@ -56,11 +57,7 @@ export const SystemSetup: React.FC = () => {
     { key: 'adminDisplayName', label: t('Administrator name') },
     { key: 'adminEmail', label: t('Administrator email'), type: 'email' },
     { key: 'defaultProjectName', label: t('Default project name') },
-    { key: 'defaultProjectSlug', label: t('Default project slug') },
-    { key: 'departingMemberEmail', label: t('Departing member'), type: 'email' },
-    { key: 'receivingMemberEmail', label: t('Receiving member'), type: 'email' },
-    { key: 'reviewerEmail', label: t('Reviewer'), type: 'email' },
-    { key: 'handoffDueDate', label: t('Handoff due date'), type: 'date' }
+    { key: 'defaultProjectSlug', label: t('Default project slug') }
   ];
 
   return (

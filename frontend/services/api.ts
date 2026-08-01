@@ -4,6 +4,8 @@ import type {
   AuditEvent,
   FileChange,
   Finding,
+  HandoffEvent,
+  HandoffOrder,
   HandoffStatus,
   LineageEdge,
   LineageNode,
@@ -149,6 +151,71 @@ export const api = {
 
   async getHandoffStatus(): Promise<HandoffStatus> {
     return request(`/v1/projects/${await projectId()}/handoff`);
+  },
+
+  async listHandoffOrders(filter?: string): Promise<HandoffOrder[]> {
+    const query = filter ? `?filter=${encodeURIComponent(filter)}` : '';
+    const body = await request<{ orders: HandoffOrder[] }>(`/v1/projects/${await projectId()}/handoffs${query}`);
+    return body.orders;
+  },
+
+  async createHandoffOrder(input: {
+    departingSubject: string;
+    departingEmailSnapshot: string;
+    receivingSubject: string;
+    receivingEmailSnapshot: string;
+    reviewerSubject: string;
+    reviewerEmailSnapshot: string;
+    dueAt: string | null;
+    dueTimezone: string;
+    tasks?: Array<{ title: string; description?: string }>;
+  }): Promise<HandoffOrder> {
+    return request(`/v1/projects/${await projectId()}/handoffs`, { method: 'POST', body: JSON.stringify(input) });
+  },
+
+  async getHandoffOrder(orderId: string): Promise<HandoffOrder> {
+    return request(`/v1/handoffs/${orderId}`);
+  },
+
+  async updateHandoffOrder(orderId: string, patch: { expectedVersion: number; departingSubject?: string; departingEmailSnapshot?: string; receivingSubject?: string; receivingEmailSnapshot?: string; reviewerSubject?: string; reviewerEmailSnapshot?: string; dueAt?: string | null; dueTimezone?: string; tasks?: Array<{ title: string; description?: string }> }): Promise<HandoffOrder> {
+    return request(`/v1/handoffs/${orderId}`, { method: 'PATCH', body: JSON.stringify(patch) });
+  },
+
+  async submitHandoffOrder(orderId: string, expectedVersion: number): Promise<HandoffOrder> {
+    return request(`/v1/handoffs/${orderId}/submit`, { method: 'POST', body: JSON.stringify({ expectedVersion }) });
+  },
+
+  async reviewHandoffOrder(orderId: string, expectedVersion: number, decision: 'approved' | 'changes_requested', comment: string): Promise<HandoffOrder> {
+    return request(`/v1/handoffs/${orderId}/reviews`, { method: 'POST', body: JSON.stringify({ expectedVersion, decision, comment }) });
+  },
+
+  async acceptHandoffOrder(orderId: string, expectedVersion: number): Promise<HandoffOrder> {
+    return request(`/v1/handoffs/${orderId}/accept`, { method: 'POST', body: JSON.stringify({ expectedVersion }) });
+  },
+
+  async completeHandoffOrder(orderId: string, expectedVersion: number): Promise<HandoffOrder> {
+    return request(`/v1/handoffs/${orderId}/complete`, { method: 'POST', body: JSON.stringify({ expectedVersion }) });
+  },
+
+  async cancelHandoffOrder(orderId: string, expectedVersion: number): Promise<HandoffOrder> {
+    return request(`/v1/handoffs/${orderId}/cancel`, { method: 'POST', body: JSON.stringify({ expectedVersion }) });
+  },
+
+  async getHandoffOrderEvents(orderId: string): Promise<HandoffEvent[]> {
+    const body = await request<{ events: HandoffEvent[] }>(`/v1/handoffs/${orderId}/events`);
+    return body.events;
+  },
+
+  async previewHandoffExport(orderId: string): Promise<{ preview: { orderId: string; orderNumber: string; drive: { name: string; bytes: number }; sheets: { auditId: string; row: string }; gmail: { to: string; subject: string; mode: string } }; sha256: string }> {
+    const order = await this.getHandoffOrder(orderId);
+    return request(`/v1/handoffs/${orderId}/exports/preview`, { method: 'POST', body: JSON.stringify({ expectedVersion: order.version }) });
+  },
+
+  async executeHandoffExport(orderId: string, expectedVersion: number, previewSha256: string): Promise<{ status: string; exportId: string; driveFileId?: string; gmailDraftId?: string; sent: boolean }> {
+    return request(`/v1/handoffs/${orderId}/exports/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ expectedVersion, previewSha256, confirmation: 'EXPORT_TO_GOOGLE_WORKSPACE' })
+    });
   },
 
   async getFileChanges(): Promise<FileChange[]> {

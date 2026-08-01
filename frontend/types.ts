@@ -88,6 +88,66 @@ export interface HandoffStatus {
   };
 }
 
+export type HandoffOrderStatus = 'draft' | 'submitted' | 'in_review' | 'changes_requested' | 'approved' | 'receiver_accepted' | 'completed' | 'cancelled';
+
+export interface HandoffTask {
+  id: string;
+  orderId: string;
+  title: string;
+  description: string;
+  status: 'pending' | 'done' | 'blocked';
+  sortOrder: number;
+}
+
+export interface HandoffReview {
+  id: string;
+  orderId: string;
+  reviewerSubject: string;
+  decision: 'approved' | 'changes_requested';
+  comment: string;
+}
+
+export interface HandoffEvent {
+  id: string;
+  orderId: string;
+  eventType: string;
+  actorSubject: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface HandoffExport {
+  id: string;
+  orderId: string;
+  kind: 'workspace' | 'local';
+  previewSha256: string;
+  status: 'in_progress' | 'succeeded' | 'failed';
+  driveFileId?: string;
+  gmailDraftId?: string;
+}
+
+export interface HandoffOrder {
+  id: string;
+  projectId: string;
+  orderNumber: string;
+  departingSubject: string;
+  departingEmailSnapshot: string;
+  receivingSubject: string;
+  receivingEmailSnapshot: string;
+  reviewerSubject: string;
+  reviewerEmailSnapshot: string;
+  dueAt: string | null;
+  dueTimezone: string;
+  status: HandoffOrderStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  overdue: boolean;
+  tasks: HandoffTask[];
+  reviews: HandoffReview[];
+  exports: HandoffExport[];
+}
+
   export interface FileChange {
     id: string;
     path: string;
@@ -185,8 +245,9 @@ export interface SetupConfig {
   notificationLanguage: string;
   defaultProjectName: string;
   defaultProjectSlug: string;
-  departingMemberEmail: string;
-  receivingMemberEmail: string;
-  reviewerEmail: string;
-  handoffDueDate: string;
+  /** Legacy event-level fields; superseded by HandoffOrder and rejected on save. */
+  departingMemberEmail?: string;
+  receivingMemberEmail?: string;
+  reviewerEmail?: string;
+  handoffDueDate?: string;
 }

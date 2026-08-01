@@ -29,6 +29,18 @@ const routeDefinitions = [
   ['get', '/v1/projects/{projectId}/evidence', 'List project evidence'],
   ['get', '/v1/projects/{projectId}/evidence/{evidenceId}', 'Read one evidence record'],
   ['get', '/v1/projects/{projectId}/handoff', 'Read project handoff state'],
+  ['get', '/v1/projects/{projectId}/handoffs', 'List handoff orders for a project'],
+  ['post', '/v1/projects/{projectId}/handoffs', 'Create a draft handoff order'],
+  ['get', '/v1/handoffs/{handoffId}', 'Read one handoff order'],
+  ['patch', '/v1/handoffs/{handoffId}', 'Update a draft handoff order'],
+  ['post', '/v1/handoffs/{handoffId}/submit', 'Submit a handoff order for review'],
+  ['post', '/v1/handoffs/{handoffId}/reviews', 'Record an approving or change-request review'],
+  ['post', '/v1/handoffs/{handoffId}/accept', 'Receiver accepts the approved handoff'],
+  ['post', '/v1/handoffs/{handoffId}/complete', 'Deterministically complete a handoff order'],
+  ['post', '/v1/handoffs/{handoffId}/cancel', 'Cancel a handoff order'],
+  ['get', '/v1/handoffs/{handoffId}/events', 'Read the append-only handoff event timeline'],
+  ['post', '/v1/handoffs/{handoffId}/exports/preview', 'Generate a preview bound to the handoff order'],
+  ['post', '/v1/handoffs/{handoffId}/exports/execute', 'Execute the bound Workspace export'],
   ['get', '/v1/projects/{projectId}/audit-events', 'Read immutable audit events'],
   ['post', '/v1/projects/{projectId}/nodes/{nodeId}/confirm', 'Confirm an inferred node'],
   ['post', '/v1/projects/{projectId}/snapshots', 'Scan an allowlisted server directory'],
@@ -60,6 +72,7 @@ const responseStatus = new Map([
   ['post /v1/projects/{projectId}/nodes/{nodeId}/confirm', '204'],
   ['delete /v1/projects/{projectId}/agent/conversations/{conversationId}', '204'],
   ['post /v1/projects/{projectId}/agent', '200'],
+  ['post /v1/projects/{projectId}/handoffs', '201'],
   ['put /v1/setup', '204']
 ]);
 
@@ -119,7 +132,104 @@ const requestSchemaByRoute = {
       conversationId: { type: 'string', minLength: 8, maxLength: 100 }
     }
   },
-  'post /v1/handoffs/{handoffId}/report': { $ref: '#/components/schemas/HandoffReportRequest' }
+  'post /v1/handoffs/{handoffId}/report': { $ref: '#/components/schemas/HandoffReportRequest' },
+  'post /v1/projects/{projectId}/handoffs': {
+    type: 'object',
+    additionalProperties: false,
+    required: ['departingSubject', 'departingEmailSnapshot', 'receivingSubject', 'receivingEmailSnapshot', 'reviewerSubject', 'reviewerEmailSnapshot'],
+    properties: {
+      departingSubject: { type: 'string', minLength: 1 },
+      departingEmailSnapshot: { type: 'string', format: 'email' },
+      receivingSubject: { type: 'string', minLength: 1 },
+      receivingEmailSnapshot: { type: 'string', format: 'email' },
+      reviewerSubject: { type: 'string', minLength: 1 },
+      reviewerEmailSnapshot: { type: 'string', format: 'email' },
+      dueAt: { type: 'string', format: 'date-time' },
+      dueTimezone: { type: 'string' },
+      tasks: {
+        type: 'array',
+        maxItems: 50,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['title'],
+          properties: {
+            title: { type: 'string', minLength: 1 },
+            description: { type: 'string' }
+          }
+        }
+      }
+    }
+  },
+  'patch /v1/handoffs/{handoffId}': {
+    type: 'object',
+    additionalProperties: false,
+    required: ['expectedVersion'],
+    properties: {
+      expectedVersion: { type: 'integer', minimum: 1 },
+      departingSubject: { type: 'string', minLength: 1 },
+      departingEmailSnapshot: { type: 'string', format: 'email' },
+      receivingSubject: { type: 'string', minLength: 1 },
+      receivingEmailSnapshot: { type: 'string', format: 'email' },
+      reviewerSubject: { type: 'string', minLength: 1 },
+      reviewerEmailSnapshot: { type: 'string', format: 'email' },
+      dueAt: { type: 'string', format: 'date-time' },
+      dueTimezone: { type: 'string' },
+      tasks: {
+        type: 'array',
+        maxItems: 50,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['title'],
+          properties: {
+            title: { type: 'string', minLength: 1 },
+            description: { type: 'string' }
+          }
+        }
+      }
+    }
+  },
+  'post /v1/handoffs/{handoffId}/submit': {
+    type: 'object', additionalProperties: false, required: ['expectedVersion'],
+    properties: { expectedVersion: { type: 'integer', minimum: 1 } }
+  },
+  'post /v1/handoffs/{handoffId}/reviews': {
+    type: 'object',
+    additionalProperties: false,
+    required: ['expectedVersion', 'decision', 'comment'],
+    properties: {
+      expectedVersion: { type: 'integer', minimum: 1 },
+      decision: { type: 'string', enum: ['approved', 'changes_requested'] },
+      comment: { type: 'string', minLength: 1 }
+    }
+  },
+  'post /v1/handoffs/{handoffId}/accept': {
+    type: 'object', additionalProperties: false, required: ['expectedVersion'],
+    properties: { expectedVersion: { type: 'integer', minimum: 1 } }
+  },
+  'post /v1/handoffs/{handoffId}/complete': {
+    type: 'object', additionalProperties: false, required: ['expectedVersion'],
+    properties: { expectedVersion: { type: 'integer', minimum: 1 } }
+  },
+  'post /v1/handoffs/{handoffId}/cancel': {
+    type: 'object', additionalProperties: false, required: ['expectedVersion'],
+    properties: { expectedVersion: { type: 'integer', minimum: 1 } }
+  },
+  'post /v1/handoffs/{handoffId}/exports/preview': {
+    type: 'object', additionalProperties: false, required: ['expectedVersion'],
+    properties: { expectedVersion: { type: 'integer', minimum: 1 } }
+  },
+  'post /v1/handoffs/{handoffId}/exports/execute': {
+    type: 'object',
+    additionalProperties: false,
+    required: ['expectedVersion', 'previewSha256', 'confirmation'],
+    properties: {
+      expectedVersion: { type: 'integer', minimum: 1 },
+      previewSha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+      confirmation: { const: 'EXPORT_TO_GOOGLE_WORKSPACE' }
+    }
+  }
 };
 
 function operationId(method, route) {

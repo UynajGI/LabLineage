@@ -27,6 +27,18 @@ import {
   scanDirectory
 } from './lib/scanner.js';
 import { projectSummary, stableEdgeId } from './lib/store.js';
+import {
+  HandoffStateError,
+  HandoffVersionConflictError,
+  assertEditable,
+  assertReceiver,
+  assertReviewer,
+  assertTransition,
+  assertVersion,
+  canComplete,
+  computeOverdue,
+  nextOrderNumber
+} from './lib/handoff-orders.js';
 import { createStore } from './lib/store-factory.js';
 import {
   createGitHubClientFromEnv,
@@ -559,17 +571,16 @@ export function buildApp() {
       adminDisplayName: z.string().max(200),
       adminEmail: email,
       dataResidency: z.string().max(50),
-      defaultRegion: z.string().max(100),
+      defaultRegion: z.string().max(100).refine(
+        (value) => value === '' || CLOUD_RUN_REGIONS.has(value),
+        'defaultRegion must be an allowed Cloud Run region or empty'
+      ),
       defaultTimezone: z.string().max(100),
       notificationLanguage: z.string().max(20),
       defaultProjectName: z.string().max(200),
-      defaultProjectSlug: z.string().regex(/^[a-z0-9-]*$/).max(100),
-      departingMemberEmail: email,
-      receivingMemberEmail: email,
-      reviewerEmail: email,
-      handoffDueDate: z.union([z.literal(''), z.iso.date()])
-    }).parse(req.body);
-    await store.update((state) => { state.setupConfig = input; });
+      defaultProjectSlug: z.string().regex(/^[a-z0-9-]*$/).max(100)
+    }).strict().parse(req.body);
+    await store.update((state) => { state.setupConfig = { ...state.setupConfig, ...input }; });
     await store.log({ action: 'update_setup_config', actor: req.actor.subject, resource: 'system/config', details: 'Configuration updated.' });
     res.status(204).end();
   });
@@ -1092,6 +1103,448 @@ export function buildApp() {
     res.json(store.get().handoffs.find((handoff) => handoff.projectId === req.params.projectId) || {
       status: 'draft', departingMember: '', receivingMember: '', dueDate: '', workspaceLinks: {}
     });
+  });
+
+  // ---- HandoffOrder domain: repeatable, approvable, versioned orders ----
+  const CLOUD_RUN_REGIONS = new Set([
+    'asia-east1', 'asia-east2', 'asia-northeast1', 'asia-northeast2', 'asia-northeast3',
+    'asia-south1', 'asia-south2', 'asia-southeast1', 'asia-southeast2',
+    'australia-southeast1', 'australia-southeast2',
+    'europe-central2', 'europe-north1', 'europe-southwest1', 'europe-west1', 'europe-west2',
+    'europe-west3', 'europe-west4', 'europe-west6', 'europe-west8', 'europe-west9',
+    'me-central1', 'me-central2', 'me-west1',
+    'northamerica-northeast1', 'northamerica-northeast2',
+    'southamerica-east1', 'southamerica-west1',
+    'us-central1', 'us-east1', 'us-east4', 'us-east5', 'us-south1', 'us-west1', 'us-west2', 'us-west3', 'us-west4'
+  ]);
+
+  const requireHandoffOrder = (req, res, next) => {
+    const order = (store.get().handoffOrders || []).find((item) => item.id === req.params.handoffId);
+    if (!order) return res.status(404).json({ error: 'Handoff order not found' });
+    req.handoffOrder = order;
+    next();
+  };
+
+  const appendHandoffEvent = (state, order, eventType, actorSubject, payload = {}) => {
+    state.handoffEvents ||= [];
+    state.handoffEvents.push({
+      id: `he_${randomUUID()}`,
+      orderId: order.id,
+      eventType,
+      actorSubject,
+      payload,
+      createdAt: new Date().toISOString()
+    });
+  };
+
+  const orderView = (state, order) => ({
+    ...order,
+    overdue: computeOverdue(order),
+    tasks: (state.handoffTasks || []).filter((task) => task.orderId === order.id).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)),
+    reviews: (state.handoffReviews || []).filter((review) => review.orderId === order.id),
+    exports: (state.handoffExports || []).filter((item) => item.orderId === order.id)
+  });
+
+  const handoffTaskInputSchema = z.object({
+    title: z.string().min(1).max(200),
+    description: z.string().max(2000).default('')
+  });
+  const orderInputSchema = z.object({
+    departingSubject: z.string().min(1).max(200),
+    departingEmailSnapshot: z.email(),
+    receivingSubject: z.string().min(1).max(200),
+    receivingEmailSnapshot: z.email(),
+    reviewerSubject: z.string().min(1).max(200),
+    reviewerEmailSnapshot: z.email(),
+    dueAt: z.union([z.literal(''), z.iso.datetime()]),
+    dueTimezone: z.string().max(100).default('UTC'),
+    tasks: z.array(handoffTaskInputSchema).max(50).default([])
+  });
+  const versionBodySchema = z.object({ expectedVersion: z.number().int().positive() });
+
+  app.get('/v1/projects/:projectId/handoffs', requireProject, (req, res) => {
+    const state = store.get();
+    let visible = (state.handoffOrders || [])
+      .filter((order) => order.projectId === req.params.projectId)
+      .map((order) => orderView(state, order));
+    if (req.query.status) visible = visible.filter((order) => order.status === req.query.status);
+    if (req.query.filter === 'needs_review') {
+      visible = visible.filter((order) => order.reviewerSubject === req.actor.subject && ['submitted', 'in_review'].includes(order.status));
+    }
+    if (req.query.filter === 'needs_accept') {
+      visible = visible.filter((order) => order.receivingSubject === req.actor.subject && order.status === 'approved');
+    }
+    if (req.query.filter === 'overdue') visible = visible.filter((order) => order.overdue);
+    visible.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    res.json({ orders: visible });
+  });
+
+  app.post('/v1/projects/:projectId/handoffs', requireProject, requireIdempotentWrite, async (req, res) => {
+    const input = orderInputSchema.parse(req.body);
+    const createdAt = new Date().toISOString();
+    let created;
+    await store.update((state) => {
+      state.handoffOrders ||= [];
+      const orderNumber = nextOrderNumber(state.handoffOrders);
+      created = {
+        id: `handoff_order_${randomUUID()}`,
+        projectId: req.params.projectId,
+        orderNumber,
+        departingSubject: input.departingSubject,
+        departingEmailSnapshot: input.departingEmailSnapshot,
+        receivingSubject: input.receivingSubject,
+        receivingEmailSnapshot: input.receivingEmailSnapshot,
+        reviewerSubject: input.reviewerSubject,
+        reviewerEmailSnapshot: input.reviewerEmailSnapshot,
+        dueAt: input.dueAt || null,
+        dueTimezone: input.dueTimezone,
+        status: 'draft',
+        version: 1,
+        createdAt,
+        updatedAt: createdAt
+      };
+      state.handoffOrders.push(created);
+      state.handoffTasks ||= [];
+      for (const [index, task] of input.tasks.entries()) {
+        state.handoffTasks.push({
+          id: `ht_${randomUUID()}`,
+          orderId: created.id,
+          title: task.title,
+          description: task.description,
+          status: 'pending',
+          sortOrder: index,
+          createdAt
+        });
+      }
+      appendHandoffEvent(state, created, 'created', req.actor.subject, { orderNumber });
+    });
+    await store.log({ action: 'create_handoff_order', actor: req.actor.subject, resource: `project/${req.params.projectId}/handoffs/${created.id}`, details: 'Handoff order created.' });
+    res.status(201).json(orderView(store.get(), created));
+  });
+
+  app.get('/v1/handoffs/:handoffId', requireHandoffOrder, (_req, res) => {
+    res.json(orderView(store.get(), _req.handoffOrder));
+  });
+
+  app.patch('/v1/handoffs/:handoffId', requireHandoffOrder, requireIdempotentWrite, async (req, res) => {
+    const patch = z.object({
+      expectedVersion: z.number().int().positive(),
+      departingSubject: z.string().min(1).max(200).optional(),
+      departingEmailSnapshot: z.email().optional(),
+      receivingSubject: z.string().min(1).max(200).optional(),
+      receivingEmailSnapshot: z.email().optional(),
+      reviewerSubject: z.string().min(1).max(200).optional(),
+      reviewerEmailSnapshot: z.email().optional(),
+      dueAt: z.union([z.literal(''), z.iso.datetime()]).optional(),
+      dueTimezone: z.string().max(100).optional(),
+      tasks: z.array(handoffTaskInputSchema).max(50).optional()
+    }).parse(req.body);
+    try {
+      assertVersion(req.handoffOrder, patch.expectedVersion);
+      assertEditable(req.handoffOrder);
+    } catch (error) {
+      if (error instanceof HandoffVersionConflictError || error instanceof HandoffStateError) {
+        return res.status(409).json({ error: error.message });
+      }
+      throw error;
+    }
+    let updated;
+    await store.update((state) => {
+      const order = (state.handoffOrders || []).find((item) => item.id === req.params.handoffId);
+      if (!order) throw new Error('Handoff order was removed');
+      assertVersion(order, patch.expectedVersion);
+      assertEditable(order);
+      if (patch.departingSubject !== undefined) order.departingSubject = patch.departingSubject;
+      if (patch.departingEmailSnapshot !== undefined) order.departingEmailSnapshot = patch.departingEmailSnapshot;
+      if (patch.receivingSubject !== undefined) order.receivingSubject = patch.receivingSubject;
+      if (patch.receivingEmailSnapshot !== undefined) order.receivingEmailSnapshot = patch.receivingEmailSnapshot;
+      if (patch.reviewerSubject !== undefined) order.reviewerSubject = patch.reviewerSubject;
+      if (patch.reviewerEmailSnapshot !== undefined) order.reviewerEmailSnapshot = patch.reviewerEmailSnapshot;
+      if (patch.dueAt !== undefined) order.dueAt = patch.dueAt || null;
+      if (patch.dueTimezone !== undefined) order.dueTimezone = patch.dueTimezone;
+      order.version += 1;
+      order.updatedAt = new Date().toISOString();
+      if (patch.tasks) {
+        state.handoffTasks = (state.handoffTasks || []).filter((task) => task.orderId !== order.id);
+        for (const [index, task] of patch.tasks.entries()) {
+          state.handoffTasks.push({
+            id: `ht_${randomUUID()}`,
+            orderId: order.id,
+            title: task.title,
+            description: task.description,
+            status: 'pending',
+            sortOrder: index,
+            createdAt: new Date().toISOString()
+          });
+        }
+      }
+      appendHandoffEvent(state, order, 'updated', req.actor.subject, { version: order.version });
+      updated = order;
+    });
+    res.json(orderView(store.get(), updated));
+  });
+
+  const applyTransition = async (req, res, target, extraCheck) => {
+    let expectedVersion;
+    try {
+      expectedVersion = versionBodySchema.parse(req.body).expectedVersion;
+    } catch (error) {
+      if (error instanceof ZodError) return res.status(400).json({ error: error.message });
+      throw error;
+    }
+    try {
+      assertVersion(req.handoffOrder, expectedVersion);
+      assertTransition(req.handoffOrder, target);
+      if (extraCheck) extraCheck(req.handoffOrder);
+    } catch (error) {
+      if (error instanceof HandoffVersionConflictError || error instanceof HandoffStateError) {
+        return res.status(409).json({ error: error.message });
+      }
+      throw error;
+    }
+    let updated;
+    await store.update((state) => {
+      const order = (state.handoffOrders || []).find((item) => item.id === req.params.handoffId);
+      if (!order) throw new Error('Handoff order was removed');
+      assertVersion(order, expectedVersion);
+      order.status = target;
+      order.version += 1;
+      order.updatedAt = new Date().toISOString();
+      appendHandoffEvent(state, order, target, req.actor.subject, { expectedVersion });
+      updated = order;
+    });
+    res.json(orderView(store.get(), updated));
+  };
+
+  app.post('/v1/handoffs/:handoffId/submit', requireHandoffOrder, requireIdempotentWrite, (req, res) =>
+    applyTransition(req, res, 'submitted'));
+  app.post('/v1/handoffs/:handoffId/cancel', requireHandoffOrder, requireIdempotentWrite, (req, res) =>
+    applyTransition(req, res, 'cancelled'));
+
+  app.post('/v1/handoffs/:handoffId/reviews', requireHandoffOrder, requireIdempotentWrite, async (req, res) => {
+    const input = z.object({
+      expectedVersion: z.number().int().positive(),
+      decision: z.enum(['approved', 'changes_requested']),
+      comment: z.string().min(1).max(2000)
+    }).parse(req.body);
+    const order = req.handoffOrder;
+    try {
+      assertReviewer(order, req.actor.subject);
+      assertVersion(order, input.expectedVersion);
+      if (order.status === 'submitted') assertTransition(order, 'in_review');
+      if (order.status !== 'submitted' && order.status !== 'in_review') {
+        throw new HandoffStateError(`Handoff order must be submitted or in_review to record a review (current: ${order.status})`);
+      }
+    } catch (error) {
+      if (error instanceof HandoffStateError || error instanceof HandoffVersionConflictError) {
+        return res.status(409).json({ error: error.message });
+      }
+      throw error;
+    }
+    let updated;
+    await store.update((state) => {
+      const current = (state.handoffOrders || []).find((item) => item.id === req.params.handoffId);
+      if (!current) throw new Error('Handoff order was removed');
+      assertVersion(current, input.expectedVersion);
+      if (current.status === 'submitted') {
+        current.status = 'in_review';
+        appendHandoffEvent(state, current, 'in_review', req.actor.subject, { expectedVersion: input.expectedVersion });
+      }
+      current.status = input.decision === 'approved' ? 'approved' : 'changes_requested';
+      current.version += 1;
+      current.updatedAt = new Date().toISOString();
+      state.handoffReviews ||= [];
+      state.handoffReviews.push({
+        id: `hr_${randomUUID()}`,
+        orderId: current.id,
+        reviewerSubject: req.actor.subject,
+        decision: input.decision,
+        comment: input.comment,
+        createdAt: new Date().toISOString()
+      });
+      appendHandoffEvent(state, current, input.decision, req.actor.subject, { comment: input.comment, reviewer: req.actor.subject });
+      updated = current;
+    });
+    res.json(orderView(store.get(), updated));
+  });
+
+  app.post('/v1/handoffs/:handoffId/accept', requireHandoffOrder, requireIdempotentWrite, async (req, res) => {
+    try {
+      assertVersion(req.handoffOrder, versionBodySchema.parse(req.body).expectedVersion);
+      assertReceiver(req.handoffOrder, req.actor.subject);
+      assertTransition(req.handoffOrder, 'receiver_accepted');
+    } catch (error) {
+      if (error instanceof ZodError) return res.status(400).json({ error: error.message });
+      if (error instanceof HandoffStateError || error instanceof HandoffVersionConflictError) {
+        return res.status(409).json({ error: error.message });
+      }
+      throw error;
+    }
+    const state = store.get();
+    let updated;
+    await store.update((draft) => {
+      const order = (draft.handoffOrders || []).find((item) => item.id === req.params.handoffId);
+      if (!order) throw new Error('Handoff order was removed');
+      order.status = 'receiver_accepted';
+      order.version += 1;
+      order.updatedAt = new Date().toISOString();
+      appendHandoffEvent(draft, order, 'receiver_accepted', req.actor.subject, { receiver: req.actor.subject });
+      updated = order;
+    });
+    res.json(orderView(state, updated));
+  });
+
+  app.post('/v1/handoffs/:handoffId/complete', requireHandoffOrder, requireIdempotentWrite, async (req, res) => {
+    try {
+      assertVersion(req.handoffOrder, versionBodySchema.parse(req.body).expectedVersion);
+      assertTransition(req.handoffOrder, 'completed');
+    } catch (error) {
+      if (error instanceof ZodError) return res.status(400).json({ error: error.message });
+      if (error instanceof HandoffStateError || error instanceof HandoffVersionConflictError) {
+        return res.status(409).json({ error: error.message });
+      }
+      throw error;
+    }
+    const state = store.get();
+    const reviews = (state.handoffReviews || []).filter((review) => review.orderId === req.params.handoffId);
+    const tasks = (state.handoffTasks || []).filter((task) => task.orderId === req.params.handoffId);
+    if (!canComplete(req.handoffOrder, reviews, tasks)) {
+      const missing = [];
+      if (!reviews.some((review) => review.decision === 'approved')) missing.push('an approving reviewer decision');
+      if (tasks.length > 0 && !tasks.every((task) => task.status === 'done')) missing.push('all handoff tasks done');
+      return res.status(409).json({ error: `Handoff completion requires: ${missing.join(', ')}` });
+    }
+    let updated;
+    await store.update((draft) => {
+      const order = (draft.handoffOrders || []).find((item) => item.id === req.params.handoffId);
+      if (!order) throw new Error('Handoff order was removed');
+      order.status = 'completed';
+      order.version += 1;
+      order.updatedAt = new Date().toISOString();
+      appendHandoffEvent(draft, order, 'completed', req.actor.subject, {});
+      updated = order;
+    });
+    res.json(orderView(store.get(), updated));
+  });
+
+  app.get('/v1/handoffs/:handoffId/events', requireHandoffOrder, (_req, res) => {
+    const events = (store.get().handoffEvents || [])
+      .filter((event) => event.orderId === _req.params.handoffId)
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    res.json({ events });
+  });
+
+  const previewForOrder = (state, order) => {
+    const summary = projectSummary(state, order.projectId);
+    const payload = buildHandoffPayload({
+      summary,
+      findings: (state.findings || []).filter((finding) => finding.projectId === order.projectId && finding.status === 'open'),
+      recipient: order.receivingEmailSnapshot
+    });
+    return {
+      action: 'preview',
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      drive: { name: `${summary.name}-handoff-${order.orderNumber}.md`, bytes: Buffer.byteLength(payload.report) },
+      sheets: { auditId: (state.audits || []).find((audit) => audit.projectId === order.projectId)?.id || order.id, row: payload.ledgerRow },
+      gmail: { to: order.receivingEmailSnapshot, subject: payload.subject, mode: 'draft-only' }
+    };
+  };
+
+  app.post('/v1/handoffs/:handoffId/exports/preview', requireHandoffOrder, requireIdempotentWrite, (req, res) => {
+    const preview = previewForOrder(store.get(), req.handoffOrder);
+    res.json({ preview, sha256: createHash('sha256').update(JSON.stringify(preview)).digest('hex') });
+  });
+
+  app.post('/v1/handoffs/:handoffId/exports/execute', requireHandoffOrder, requireIdempotentWrite, async (req, res) => {
+    const input = z.object({
+      expectedVersion: z.number().int().positive(),
+      previewSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+      confirmation: z.literal('EXPORT_TO_GOOGLE_WORKSPACE')
+    }).parse(req.body);
+    const order = req.handoffOrder;
+    if (!['receiver_accepted', 'completed'].includes(order.status)) {
+      return res.status(409).json({ error: 'Workspace export requires an approved and receiver-accepted handoff order' });
+    }
+    const preview = previewForOrder(store.get(), order);
+    const actualSha256 = createHash('sha256').update(JSON.stringify(preview)).digest('hex');
+    if (actualSha256 !== input.previewSha256) {
+      return res.status(409).json({ error: 'previewSha256 does not match the current order preview; regenerate the preview' });
+    }
+    try {
+      assertVersion(order, input.expectedVersion);
+    } catch (error) {
+      if (error instanceof HandoffVersionConflictError) return res.status(409).json({ error: error.message });
+      throw error;
+    }
+    let exportId;
+    await store.update((draft) => {
+      draft.handoffExports ||= [];
+      const record = {
+        id: `hex_${randomUUID()}`,
+        orderId: order.id,
+        kind: 'workspace',
+        previewSha256: input.previewSha256,
+        status: 'in_progress',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      draft.handoffExports.push(record);
+      appendHandoffEvent(draft, order, 'export_started', req.actor.subject, { exportId: record.id, previewSha256: input.previewSha256 });
+      exportId = record.id;
+    });
+    try {
+      const client = await createGoogleWorkspaceClientFromEnv();
+      const summary = projectSummary(store.get(), order.projectId);
+      const payload = buildHandoffPayload({
+        summary,
+        findings: (store.get().findings || []).filter((finding) => finding.projectId === order.projectId && finding.status === 'open'),
+        recipient: order.receivingEmailSnapshot
+      });
+      const drive = await client.createDriveReport({
+        name: `${summary.name}-handoff-${order.orderNumber}.md`,
+        markdown: payload.report,
+        folderId: process.env.GOOGLE_DRIVE_FOLDER_ID,
+        idempotencyKey: `${req.headers['idempotency-key']}:${exportId}:drive`
+      });
+      await client.appendSheetOnce({
+        spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+        range: process.env.GOOGLE_SHEETS_RANGE || 'Audit!A:E',
+        values: [[payload.ledgerRow]],
+        idempotencyKey: `${req.headers['idempotency-key']}:${exportId}:sheets`
+      });
+      const draftResult = await client.createGmailDraft({
+        to: order.receivingEmailSnapshot,
+        subject: payload.subject,
+        markdown: payload.report,
+        idempotencyKey: `${req.headers['idempotency-key']}:${exportId}:gmail`
+      });
+      await store.update((draft) => {
+        const record = draft.handoffExports.find((item) => item.id === exportId);
+        if (!record) throw new Error('Handoff export record was lost');
+        Object.assign(record, {
+          status: 'succeeded',
+          driveFileId: drive.id,
+          gmailDraftId: draftResult.id,
+          updatedAt: new Date().toISOString()
+        });
+        const orderRecord = (draft.handoffOrders || []).find((item) => item.id === order.id);
+        if (orderRecord) appendHandoffEvent(draft, orderRecord, 'export_succeeded', req.actor.subject, { exportId, sent: false });
+      });
+      res.json({ status: 'succeeded', exportId, driveFileId: drive.id, gmailDraftId: draftResult.id, sent: false });
+    } catch (error) {
+      await store.update((draft) => {
+        const record = draft.handoffExports.find((item) => item.id === exportId);
+        if (record) {
+          record.status = 'failed';
+          record.updatedAt = new Date().toISOString();
+        }
+        const orderRecord = (draft.handoffOrders || []).find((item) => item.id === order.id);
+        if (orderRecord) appendHandoffEvent(draft, orderRecord, 'export_failed', req.actor.subject, { exportId, error: error instanceof Error ? error.message : 'unknown' });
+      });
+      const message = error instanceof Error ? error.message : 'Workspace export failed';
+      return res.status(502).json({ error: message });
+    }
   });
   app.get('/v1/projects/:projectId/audit-events', requireProject, (req, res) => {
     res.json(store.get().auditEvents.filter((event) => event.resource === `project/${req.params.projectId}` || event.resource?.startsWith(`project/${req.params.projectId}/`)));

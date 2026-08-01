@@ -264,10 +264,10 @@ export async function syncNormalizedProjection(client, tenantId, state) {
     const id = stableUuid(`handoff-report:${report.id}`);
     await client.query(
       `INSERT INTO handoff_reports(
-         id,tenant_id,project_id,external_id,handoff_external_id,version,format,sha256,
+         id,tenant_id,project_id,external_id,handoff_external_id,handoff_order_id,version,format,sha256,
          storage_uri,generated_by,metadata,created_at
        )
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13)
        ON CONFLICT(id) DO UPDATE SET sha256=EXCLUDED.sha256,storage_uri=EXCLUDED.storage_uri,metadata=EXCLUDED.metadata`,
       [
         id,
@@ -275,6 +275,7 @@ export async function syncNormalizedProjection(client, tenantId, state) {
         projectId,
         report.id,
         report.handoffId,
+        report.handoffOrderId ? stableUuid(`handoff-order:${report.handoffOrderId}`) : null,
         report.version,
         report.format,
         report.sha256,
@@ -289,6 +290,129 @@ export async function syncNormalizedProjection(client, tenantId, state) {
           sizeBytes: report.sizeBytes
         }),
         report.createdAt
+      ]
+    );
+  }
+
+  const handoffOrderIds = new Map((state.handoffOrders || []).map((order) => [order.id, stableUuid(`handoff-order:${order.id}`)]));
+  const handoffTaskIds = new Map((state.handoffTasks || []).map((task) => [task.id, stableUuid(`handoff-task:${task.id}`)]));
+
+  for (const order of state.handoffOrders || []) {
+    const projectId = projectIds.get(order.projectId);
+    if (!projectId) continue;
+    const id = stableUuid(`handoff-order:${order.id}`);
+    await client.query(
+      `INSERT INTO handoff_orders(
+         id,tenant_id,project_id,external_id,order_number,departing_subject,departing_email_snapshot,
+         receiving_subject,receiving_email_snapshot,reviewer_subject,reviewer_email_snapshot,
+         due_at,due_timezone,status,version,created_at,updated_at
+       )
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+       ON CONFLICT(id) DO UPDATE SET
+         status=EXCLUDED.status,version=EXCLUDED.version,due_at=EXCLUDED.due_at,
+         updated_at=EXCLUDED.updated_at`,
+      [
+        id,
+        tenantId,
+        projectId,
+        order.id,
+        order.orderNumber,
+        order.departingSubject,
+        order.departingEmailSnapshot || '',
+        order.receivingSubject,
+        order.receivingEmailSnapshot || '',
+        order.reviewerSubject,
+        order.reviewerEmailSnapshot || '',
+        order.dueAt || null,
+        order.dueTimezone || 'UTC',
+        order.status || 'draft',
+        order.version || 1,
+        order.createdAt || new Date().toISOString(),
+        order.updatedAt || new Date().toISOString()
+      ]
+    );
+  }
+
+  for (const participant of state.handoffParticipants || []) {
+    const orderId = handoffOrderIds.get(participant.orderId);
+    if (!orderId) continue;
+    const id = stableUuid(`handoff-participant:${participant.id}`);
+    await client.query(
+      `INSERT INTO handoff_participants(id,tenant_id,order_id,external_id,role,subject,email_snapshot,created_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT(id) DO UPDATE SET email_snapshot=EXCLUDED.email_snapshot`,
+      [
+        id, tenantId, orderId, participant.id, participant.role,
+        participant.subject, participant.emailSnapshot || '', participant.createdAt || new Date().toISOString()
+      ]
+    );
+  }
+
+  for (const task of state.handoffTasks || []) {
+    const orderId = handoffOrderIds.get(task.orderId);
+    if (!orderId) continue;
+    const id = stableUuid(`handoff-task:${task.id}`);
+    await client.query(
+      `INSERT INTO handoff_tasks(id,tenant_id,order_id,external_id,title,description,status,sort_order,created_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status,description=EXCLUDED.description`,
+      [
+        id, tenantId, orderId, task.id, task.title, task.description || '',
+        task.status || 'pending', task.sortOrder || 0, task.createdAt || new Date().toISOString()
+      ]
+    );
+  }
+
+  for (const link of state.handoffTaskEvidence || []) {
+    const taskId = handoffTaskIds.get(link.taskId);
+    if (!taskId) continue;
+    const id = stableUuid(`handoff-task-evidence:${link.id}`);
+    await client.query(
+      `INSERT INTO handoff_task_evidence(id,tenant_id,task_id,external_id,evidence_id,created_at)
+       VALUES($1,$2,$3,$4,$5,$6)
+       ON CONFLICT(id) DO NOTHING`,
+      [id, tenantId, taskId, link.id, link.evidenceId, link.createdAt || new Date().toISOString()]
+    );
+  }
+
+  for (const review of state.handoffReviews || []) {
+    const orderId = handoffOrderIds.get(review.orderId);
+    if (!orderId) continue;
+    const id = stableUuid(`handoff-review:${review.id}`);
+    await client.query(
+      `INSERT INTO handoff_reviews(id,tenant_id,order_id,external_id,reviewer_subject,decision,comment,created_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT(id) DO NOTHING`,
+      [id, tenantId, orderId, review.id, review.reviewerSubject, review.decision, review.comment || '', review.createdAt || new Date().toISOString()]
+    );
+  }
+
+  for (const event of state.handoffEvents || []) {
+    const orderId = handoffOrderIds.get(event.orderId);
+    if (!orderId) continue;
+    const id = stableUuid(`handoff-event:${event.id}`);
+    await client.query(
+      `INSERT INTO handoff_events(id,tenant_id,order_id,external_id,event_type,actor_subject,payload,created_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8)
+       ON CONFLICT(id) DO NOTHING`,
+      [id, tenantId, orderId, event.id, event.eventType, event.actorSubject, JSON.stringify(event.payload || {}), event.createdAt || new Date().toISOString()]
+    );
+  }
+
+  for (const exportRecord of state.handoffExports || []) {
+    const orderId = handoffOrderIds.get(exportRecord.orderId);
+    if (!orderId) continue;
+    const id = stableUuid(`handoff-export:${exportRecord.id}`);
+    await client.query(
+      `INSERT INTO handoff_exports(id,tenant_id,order_id,external_id,kind,preview_sha256,status,
+         drive_file_id,sheets_ledger,gmail_draft_id,created_at,updated_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status,updated_at=EXCLUDED.updated_at`,
+      [
+        id, tenantId, orderId, exportRecord.id, exportRecord.kind, exportRecord.previewSha256,
+        exportRecord.status || 'in_progress', exportRecord.driveFileId || null,
+        exportRecord.sheetsLedger || null, exportRecord.gmailDraftId || null,
+        exportRecord.createdAt || new Date().toISOString(), exportRecord.updatedAt || new Date().toISOString()
       ]
     );
   }

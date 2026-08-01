@@ -8,7 +8,7 @@ const routes = [
   { link: '目录差异', heading: '非 Git 目录追踪', hash: '#/snapshots' },
   { link: '审计发现', heading: '审计发现', hash: '#/findings' },
   { link: '守护代理', heading: '守护代理', hash: '#/agent' },
-  { link: '交接工作区', heading: '交接工作区', hash: '#/handoff' },
+  { link: '交接工作区', heading: '交接单', hash: '#/handoff' },
   { link: '上传中心', heading: '上传中心', hash: '#/upload' },
   { link: '系统设置', heading: '系统设置', hash: '#/setup' },
   { link: '安全与审计', heading: '安全与审计', hash: '#/security' }

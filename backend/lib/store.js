@@ -87,6 +87,13 @@ export function makeDemoState() {
     ingestionJobs: [],
     statusProposals: [],
     handoffReports: [],
+    handoffOrders: [],
+    handoffParticipants: [],
+    handoffTasks: [],
+    handoffTaskEvidence: [],
+    handoffReviews: [],
+    handoffEvents: [],
+    handoffExports: [],
     idempotencyRecords: [],
     snapshots: [],
     evidence: nodes.flatMap((node) => (node.evidenceIds || []).map((id) => ({
@@ -187,6 +194,24 @@ export function normalizeStateOwnership(state) {
   for (const handoff of state.handoffs || []) {
     if (!handoff.id) {
       handoff.id = `handoff_${createHash('sha256').update(String(handoff.projectId)).digest('hex').slice(0, 24)}`;
+      changed = true;
+    }
+  }
+  for (const order of state.handoffOrders || []) {
+    if (!order.id) {
+      order.id = `handoff_order_${createHash('sha256').update(String(order.projectId) + order.orderNumber).digest('hex').slice(0, 24)}`;
+      changed = true;
+    }
+    if (!order.status) {
+      order.status = 'draft';
+      changed = true;
+    }
+    if (!Number.isInteger(order.version) || order.version < 1) {
+      order.version = 1;
+      changed = true;
+    }
+    if (!order.updatedAt) {
+      order.updatedAt = new Date().toISOString();
       changed = true;
     }
   }
