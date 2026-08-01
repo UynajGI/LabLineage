@@ -302,6 +302,7 @@ const translations: Record<string, { en: string; zh: string }> = {
   'Task title': { en: 'Task title', zh: '任务标题' },
   'Task description': { en: 'Task description', zh: '任务描述' },
   'Add task': { en: 'Add task', zh: '添加任务' },
+  'Create': { en: 'Create', zh: '创建' },
   'Submit for review': { en: 'Submit for review', zh: '提交审核' },
   'Approve': { en: 'Approve', zh: '批准' },
   'Request changes': { en: 'Request changes', zh: '要求修改' },
