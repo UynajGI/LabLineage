@@ -31,6 +31,9 @@
 
 - Every `/v1` write route uses the durable idempotency middleware and declares
   `Idempotency-Key` in OpenAPI.
+- Handoff order state transitions, task status and completion are deterministic
+  (`backend/lib/handoff-orders.js`, `expectedVersion`-checked); the ADK agent
+  only explains and previews, never transitions order state.
 - Every tenant table uses `ENABLE RLS`, `FORCE RLS` and a tenant policy.
 - Migrations are forward-only, consecutively numbered and immutable after use.
 - Facts, inferences, conflicts and missing evidence must stay distinguishable;

@@ -9,7 +9,9 @@ Express API ── JsonStore (.lablineage/state.json, development only)
    ├── local scanner → SHA-256 snapshots → deterministic diff
    ├── manifest importer → nodes + evidence edges
    ├── audit engine → R0–R4 score + non-destructive findings
-   ├── handoff exporter → immutable Markdown + CSV + unsent EML draft
+   ├── handoff orders → per-project HandoffOrder (draft→submitted→in_review→approved→receiver_accepted→completed, +changes_requested/cancelled)
+   │      versioned, append-only events, deterministic completion gate
+   ├── handoff exporter → immutable Markdown + CSV + unsent EML draft (bound to an order + previewSha256)
    │
    └── Google ADK Runner
           │ projectId + actorId + conversationId
