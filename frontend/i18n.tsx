@@ -247,6 +247,28 @@ const translations: Record<string, { en: string; zh: string }> = {
   'Relation confirmed and recorded as review evidence.': { en: 'Relation confirmed and recorded as review evidence.', zh: '关系已确认并记录为审查证据。' },
   'Relation rejected and recorded as review evidence.': { en: 'Relation rejected and recorded as review evidence.', zh: '关系已拒绝并记录为审查证据。' },
   'Unable to review this relation.': { en: 'Unable to review this relation.', zh: '无法审查该关系。' },
+
+  // ---- 后端能力列表（/api/capabilities 的 title / detail）----
+  'Guardian API': { en: 'Guardian API', zh: '守护 API' },
+  'PostgreSQL evidence store': { en: 'PostgreSQL evidence store', zh: 'PostgreSQL 证据存储' },
+  'OIDC and project RBAC': { en: 'OIDC and project RBAC', zh: 'OIDC 与项目 RBAC' },
+  'Signed Edge Collector': { en: 'Signed Edge Collector', zh: '签名 Edge Collector' },
+  'GitHub read-only connector': { en: 'GitHub read-only connector', zh: 'GitHub 只读连接器' },
+  'Google Workspace handoff': { en: 'Google Workspace handoff', zh: 'Google Workspace 交接' },
+  'Immutable report object storage': { en: 'Immutable report object storage', zh: '不可变报告对象存储' },
+  'Google ADK Guardian Agent': { en: 'Google ADK Guardian Agent', zh: 'Google ADK 守护代理' },
+  'Runtime / Registry / Gateway': { en: 'Runtime / Registry / Gateway', zh: '运行时 / 注册表 / 网关' },
+  'Evidence, lineage, audit, agent and handoff routes are running.': { en: 'Evidence, lineage, audit, agent and handoff routes are running.', zh: '证据、溯源、审计、代理与交接路由均在运行。' },
+  'DATABASE_URL is configured; run migrations before production use.': { en: 'DATABASE_URL is configured; run migrations before production use.', zh: '已配置 DATABASE_URL；生产使用前请运行迁移。' },
+  'Local JSON development store is active.': { en: 'Local JSON development store is active.', zh: '本地 JSON 开发存储已启用。' },
+  'Authentication mode: {mode}.': { en: 'Authentication mode: {mode}.', zh: '鉴权模式：{mode}。' },
+  'CLI, SQLite incremental index, static parsers, path tokens and Ed25519 bundles are implemented.': { en: 'CLI, SQLite incremental index, static parsers, path tokens and Ed25519 bundles are implemented.', zh: 'CLI、SQLite 增量索引、静态解析器、路径令牌与 Ed25519 包均已实现。' },
+  'Uses a read-only GitHub App installation token or GITHUB_TOKEN.': { en: 'Uses a read-only GitHub App installation token or GITHUB_TOKEN.', zh: '使用只读 GitHub App 安装令牌或 GITHUB_TOKEN。' },
+  'Drive report, idempotent Sheets row and Gmail draft only.': { en: 'Drive report, idempotent Sheets row and Gmail draft only.', zh: '仅创建 Drive 报告、幂等 Sheets 行与 Gmail 草稿。' },
+  'Atomic local object store is active.': { en: 'Atomic local object store is active.', zh: '原子本地对象存储已启用。' },
+  'Google Cloud Storage with generation preconditions is required.': { en: 'Google Cloud Storage with generation preconditions is required.', zh: '需要带世代前置条件的 Google Cloud Storage。' },
+  'Model: {model}.': { en: 'Model: {model}.', zh: '模型：{model}。' },
+  'Cloud deployment and registry validation are still required.': { en: 'Cloud deployment and registry validation are still required.', zh: '仍需云端部署与注册表校验。' },
 };
 
 function interpolate(template: string, values: Record<string, string | number>): string {
@@ -298,4 +320,13 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
 export function useI18n(): LanguageContextValue {
   return useContext(LanguageContext);
+}
+
+/** 翻译后端能力详情（含"鉴权模式 / 模型"这类动态值） */
+export function translateCapabilityDetail(t: (text: string, values?: Record<string, string | number>) => string, detail: string): string {
+  const auth = detail.match(/^Authentication mode: (.+)\.$/);
+  if (auth) return t('Authentication mode: {mode}.', { mode: auth[1] });
+  const model = detail.match(/^Model: (.+)\.$/);
+  if (model) return t('Model: {model}.', { model: model[1] });
+  return t(detail);
 }

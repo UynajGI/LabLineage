@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Clock, RefreshCw, ShieldAlert } from 'lucide-react';
 import { api } from '../services/api';
-import { useI18n } from '../i18n';
+import { useI18n, translateCapabilityDetail } from '../i18n';
 
 export const ImplementationChecklist: React.FC = () => {
   const { t } = useI18n();
@@ -41,8 +41,8 @@ export const ImplementationChecklist: React.FC = () => {
           <li key={item.id} className="p-4 hover:bg-slate-50 transition-colors flex items-start justify-between">
             <div className="flex items-start space-x-4">
               <div>
-                <h4 className="text-sm font-bold text-slate-800">{item.title}</h4>
-                <p className="text-sm text-slate-600 mt-1">{item.detail}</p>
+                <h4 className="text-sm font-bold text-slate-800">{t(item.title)}</h4>
+                <p className="text-sm text-slate-600 mt-1">{translateCapabilityDetail(t, item.detail)}</p>
               </div>
             </div>
           </li>

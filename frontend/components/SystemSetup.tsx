@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Loader2, Save, ShieldAlert } from 'lucide-react';
 import { api } from '../services/api';
 import type { SetupConfig } from '../types';
-import { useI18n } from '../i18n';
+import { useI18n, translateCapabilityDetail } from '../i18n';
 
 type CapabilityResponse = Awaited<ReturnType<typeof api.getCapabilities>>;
 
@@ -109,9 +109,9 @@ export const SystemSetup: React.FC = () => {
               <article key={item.id} className={`border rounded-lg p-4 ${ready ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'}`}>
                 <div className="flex items-center gap-2 font-semibold text-slate-800">
                   {ready ? <CheckCircle2 className="text-green-600" size={18} /> : <ShieldAlert className="text-amber-600" size={18} />}
-                  {item.title}
+                  {t(item.title)}
                 </div>
-                <p className="text-sm text-slate-600 mt-2">{item.detail}</p>
+                <p className="text-sm text-slate-600 mt-2">{translateCapabilityDetail(t, item.detail)}</p>
                 <code className="text-xs text-slate-500 mt-2 block">{item.state}</code>
               </article>
             );
