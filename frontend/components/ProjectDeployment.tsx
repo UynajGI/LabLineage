@@ -17,7 +17,6 @@ type SourceChoice = 'collector' | 'github' | 'zip';
 type Stage = 'project' | 'source' | 'analysis' | 'report';
 
 interface ProjectDeploymentProps {
-  activeProjectId: string;
   actorRoles: string[];
   onProjectSelected: (projectId: string) => Promise<void>;
   onAnalysisCompleted: (projectId: string) => Promise<void>;
@@ -51,14 +50,13 @@ function resultTone(status: AssessmentResult['status']): string {
 }
 
 export const ProjectDeployment: React.FC<ProjectDeploymentProps> = ({
-  activeProjectId,
   actorRoles,
   onProjectSelected,
   onAnalysisCompleted
 }) => {
   const { t } = useI18n();
   const initial = useMemo(hashSelection, []);
-  const [projectId, setProjectId] = useState(initial.projectId || activeProjectId);
+  const [projectId, setProjectId] = useState(initial.projectId);
   const [runId, setRunId] = useState(initial.runId);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [run, setRun] = useState<AnalysisRun | null>(null);

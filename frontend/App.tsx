@@ -203,7 +203,6 @@ const App: React.FC = () => {
       case '/handoff': return <HandoffView />;
       case '/deploy': return (
         <ProjectDeployment
-          activeProjectId={summary.id}
           actorRoles={actor.roles}
           onProjectSelected={refreshSelectedProject}
           onAnalysisCompleted={refreshSelectedProject}
