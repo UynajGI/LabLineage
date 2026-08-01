@@ -46,3 +46,5 @@
 - Use Conventional Commits.
 - Preserve unrelated user work and never stage local credentials or generated
   state.
+- Console UI strings go through `t()` in `frontend/i18n.tsx` (default zh, with
+  the EN/中文 toggle); do not hardcode new user-facing English labels.
