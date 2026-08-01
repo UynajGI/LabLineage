@@ -65,17 +65,17 @@
 
 ---
 
-## 5. 剩余 3 天行动清单（按性价比排序）
+## 5. 提交前行动清单（截止 2026-08-03 23:59 UTC+8，按性价比排序）
 
 **P0 — 完成度 + 契合度命脉：**
-- [ ] 跑通 `npm install --ignore-scripts && npm run seed && npm run dev`，按 `docs/demo-script.md` 11 步走一遍（找没参与开发的人做一次冷启动测试）
+- [ ] 跑通 `npm install --ignore-scripts && npm run seed && npm run dev`，按 `docs/demo-script.md` 11 步走一遍（找没参与开发的人做一次冷启动测试；完整 5 人流程见 `output/competition/usability-test-kit.md`）
 - [ ] 部署一个公开在线体验实例（Cloud Run），提交表单填体验链接；填 N/A 会明显吃亏
-- [ ] 录 3 分钟演示视频：前 30 秒"是什么 / 给谁用 / 解决什么"，先演示后讲技术；手机检查文字可读性
-- [ ] PPT ≤10 页，必须含「命题要求 → 对应解法」对照表页（直接用 §2 表格，截取 8–10 行）+ 架构页（ADK 编排图）+ 量化指标页
+- [ ] 录 3 分钟演示视频（逐字稿已备好：`output/competition/video-script.md`）：前 30 秒"是什么 / 给谁用 / 解决什么"，先演示后讲技术；手机检查文字可读性
+- [x] PPT ≤10 页：`output/competition/ppt/index.html`（含对照表页 / ADK 编排页 / 真实评测指标页，10 页渲染验证通过）
 
 **P1 — 契合度加分：**
 - [x] 跑 live eval：已完成（`output/live-agent-eval-e930909.json`），实测 route 91.7% / tool 66.7% / citation 56.3% / leakage 0% / P95 57.6s / $0.155（24 场景），数字已写入 PPT 指标页
-- [ ] 部署公开实例并留存 Cloud Run 部署制品（immutable image / revision / health / rollback）——需 GCP 凭据，无凭据则在提交说明里写明"未部署"，**不得声称已部署**（demo-script 第 11 步同规则）
+- [ ] 部署公开实例并留存 Cloud Run 部署制品（immutable image / revision / health / rollback）——**步骤见 `docs/demo-deployment.md`（免费额度内最小方案）+ 一键脚本 `output/competition/deploy-demo.sh`**；需 GCP 凭据，无凭据则在提交说明里写明"未部署"，**不得声称已部署**（demo-script 第 11 步同规则）
 - [x] README 增加"命题映射"小节（已加，链接本文件）
 - [ ] 确认 GitHub 仓库 **public**，README 写清运行方式与技术栈（评委要验证）
 

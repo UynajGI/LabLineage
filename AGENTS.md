@@ -9,6 +9,9 @@
 - Install repository hooks with `node scripts/install-git-hooks.mjs`.
 - Before handoff, run `node scripts/git-hooks.mjs full`. A real push also runs
   Playwright E2E/Axe through `pre-push`.
+- Benchmark the scan/snapshot/diff/audit pipeline on synthetic messy projects
+  with `npm run benchmark:messy --workspace backend`; it writes the git-ignored
+  `output/benchmark/` report and never touches repository state.
 
 ## Security boundaries
 
