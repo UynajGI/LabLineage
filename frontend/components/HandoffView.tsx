@@ -2,10 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, HardDrive, Loader2, Mail } from 'lucide-react';
 import { api } from '../services/api';
 import type { SetupConfig } from '../types';
+import { useI18n } from '../i18n';
 
 type Preview = Awaited<ReturnType<typeof api.previewWorkspaceHandoff>>;
 
 export const HandoffView: React.FC = () => {
+  const { t } = useI18n();
   const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
   const [config, setConfig] = useState<SetupConfig | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -25,18 +27,18 @@ export const HandoffView: React.FC = () => {
       setPreview(handoffPreview);
       setWorkspaceConfigured(status.capabilities.some((item) => item.id === 'workspace' && item.state === 'configured'));
     }).catch((loadError) => {
-      setError(loadError instanceof Error ? loadError.message : 'Unable to build handoff preview');
+      setError(loadError instanceof Error ? loadError.message : t('Unable to build handoff preview'));
     });
-  }, [idempotencyKey]);
+  }, [idempotencyKey, t]);
 
   const createLocalPreview = async () => {
     setBusy(true);
     setError('');
     try {
       const result = await api.executeHandoffActions();
-      setMessage(`Local preview created: ${result.outputDir}`);
+      setMessage(`${t('Local preview created:')} ${result.outputDir}`);
     } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : 'Local preview failed');
+      setError(actionError instanceof Error ? actionError.message : t('Local preview failed'));
     } finally {
       setBusy(false);
     }
@@ -48,9 +50,9 @@ export const HandoffView: React.FC = () => {
     setError('');
     try {
       const result = await api.executeWorkspaceHandoff(idempotencyKey);
-      setMessage(`Drive file ${result.driveFileId}, Sheets ledger updated, Gmail draft ${result.gmailDraftId}. No email was sent.`);
+      setMessage(`${t('Drive file')} ${result.driveFileId}、${t('Sheets ledger updated')}、${t('Gmail draft')} ${result.gmailDraftId}。${t('No email was sent.')}`);
     } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : 'Workspace export failed');
+      setError(actionError instanceof Error ? actionError.message : t('Workspace export failed'));
     } finally {
       setBusy(false);
     }
@@ -63,36 +65,36 @@ export const HandoffView: React.FC = () => {
   return (
     <div className="space-y-6 max-w-4xl mx-auto pb-12">
       <div>
-        <h2 className="text-2xl font-bold text-slate-800">Workspace Handoff</h2>
-        <p className="text-slate-600 mt-1">Live preview first; external writes require explicit confirmation and an idempotency key.</p>
+        <h2 className="text-2xl font-bold text-slate-800">{t('Workspace Handoff')}</h2>
+        <p className="text-slate-600 mt-1">{t('Live preview first; external writes require explicit confirmation and an idempotency key.')}</p>
       </div>
 
       <div className="grid gap-4">
         <article className="bg-white border border-slate-200 rounded-lg p-5">
-          <div className="flex items-center gap-3"><HardDrive className="text-blue-600" /><h3 className="font-semibold">Google Drive report</h3></div>
-          <p className="text-sm text-slate-600 mt-3">Create <code>{preview.drive.name}</code> ({preview.drive.bytes.toLocaleString()} bytes).</p>
+          <div className="flex items-center gap-3"><HardDrive className="text-blue-600" /><h3 className="font-semibold">{t('Google Drive report')}</h3></div>
+          <p className="text-sm text-slate-600 mt-3">{t('Create {name} ({bytes} bytes).', { name: preview.drive.name, bytes: preview.drive.bytes.toLocaleString() })}</p>
         </article>
         <article className="bg-white border border-slate-200 rounded-lg p-5">
-          <div className="flex items-center gap-3"><FileSpreadsheet className="text-green-600" /><h3 className="font-semibold">Google Sheets ledger</h3></div>
-          <p className="text-sm text-slate-600 mt-3">Append audit <code>{preview.sheets.auditId}</code> once; retries do not duplicate the row.</p>
+          <div className="flex items-center gap-3"><FileSpreadsheet className="text-green-600" /><h3 className="font-semibold">{t('Google Sheets ledger')}</h3></div>
+          <p className="text-sm text-slate-600 mt-3">{t('Append audit {auditId} once; retries do not duplicate the row.', { auditId: preview.sheets.auditId })}</p>
         </article>
         <article className="bg-white border border-slate-200 rounded-lg p-5">
-          <div className="flex items-center gap-3"><Mail className="text-red-600" /><h3 className="font-semibold">Gmail draft</h3></div>
-          <p className="text-sm text-slate-600 mt-3">Create an unsent draft to <strong>{preview.gmail.to}</strong> with subject “{preview.gmail.subject}”.</p>
+          <div className="flex items-center gap-3"><Mail className="text-red-600" /><h3 className="font-semibold">{t('Gmail draft')}</h3></div>
+          <p className="text-sm text-slate-600 mt-3">{t('Create an unsent draft to {to} with subject “{subject}”.', { to: preview.gmail.to, subject: preview.gmail.subject })}</p>
         </article>
       </div>
 
       {!workspaceConfigured && (
         <div className="flex gap-3 bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-900">
           <AlertTriangle className="shrink-0" size={20} />
-          <p>Google Workspace OAuth is not configured. You can create accurate local Markdown/CSV/EML previews; external export remains disabled.</p>
+          <p>{t('Google Workspace OAuth is not configured. You can create accurate local Markdown/CSV/EML previews; external export remains disabled.')}</p>
         </div>
       )}
 
       {workspaceConfigured && (
         <label className="flex gap-3 items-start bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-950">
           <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="mt-1" />
-          <span>I reviewed the preview and authorize Drive creation, one idempotent Sheets append, and an unsent Gmail draft. No email may be sent.</span>
+          <span>{t('I reviewed the preview and authorize Drive creation, one idempotent Sheets append, and an unsent Gmail draft. No email may be sent.')}</span>
         </label>
       )}
 
@@ -101,10 +103,10 @@ export const HandoffView: React.FC = () => {
 
       <div className="flex flex-wrap gap-3 justify-end">
         <button disabled={busy} onClick={createLocalPreview} className="px-5 py-2.5 rounded-md border border-slate-300 bg-white text-slate-800 disabled:opacity-50">
-          Create local preview
+          {t('Create local preview')}
         </button>
         <button disabled={busy || !workspaceConfigured || !confirmed} onClick={exportWorkspace} className="px-5 py-2.5 rounded-md bg-blue-600 text-white disabled:opacity-40">
-          {busy ? 'Working…' : 'Confirm Workspace export'}
+          {busy ? t('Working…') : t('Confirm Workspace export')}
         </button>
       </div>
     </div>

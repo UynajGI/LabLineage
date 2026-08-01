@@ -3,6 +3,7 @@ import * as d3 from 'd3';
 import { LineageNode, LineageEdge } from '../types';
 import { X, FileText, Activity, AlertCircle, CheckCircle, UserCheck, Link } from 'lucide-react';
 import { api } from '../services/api';
+import { useI18n } from '../i18n';
 
 interface LineageGraphProps {
   nodes: LineageNode[];
@@ -31,9 +32,10 @@ const getStrokeColor = (status?: string) => {
 };
 
 export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes, edges, width = 800, height = 600 }) => {
+  const { t } = useI18n();
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  
+
   const [nodes, setNodes] = useState<LineageNode[]>(initialNodes);
   const [edgeData, setEdgeData] = useState<LineageEdge[]>(edges);
   const [selectedNode, setSelectedNode] = useState<LineageNode | null>(null);
@@ -181,7 +183,7 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
       .attr('fill', '#1e293b')
       .style('font-weight', 'bold')
       .style('font-size', '12px');
-      
+
     node.append('text')
       .attr('dx', 24)
       .attr('dy', 18)
@@ -237,9 +239,9 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
       );
       setNodes(updatedNodes);
       setSelectedNode({ ...selectedNode, humanConfirmed: true, status: 'accepted' });
-      setReviewMessage('Human confirmation recorded in the audit log.');
+      setReviewMessage(t('Human confirmation recorded in the audit log.'));
     } catch (error) {
-      setReviewError(error instanceof Error ? error.message : 'Unable to confirm this node.');
+      setReviewError(error instanceof Error ? error.message : t('Unable to confirm this node.'));
     } finally {
       setReviewBusy(false);
     }
@@ -248,17 +250,17 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
   const handleStatusProposal = async () => {
     if (!selectedNode) return;
     if (!proposalReason.trim()) {
-      setReviewError('Explain why this status should change.');
+      setReviewError(t('Explain why this status should change.'));
       return;
     }
     setReviewBusy(true);
     setReviewError('');
     try {
       await api.proposeAssetStatus(selectedNode.id, proposalStatus, proposalReason.trim());
-      setReviewMessage(`Status proposal “${proposalStatus}” submitted for review. The formal status is unchanged.`);
+      setReviewMessage(t('Status proposal “{status}” submitted for review. The formal status is unchanged.', { status: proposalStatus }));
       setProposalReason('');
     } catch (error) {
-      setReviewError(error instanceof Error ? error.message : 'Unable to submit the status proposal.');
+      setReviewError(error instanceof Error ? error.message : t('Unable to submit the status proposal.'));
     } finally {
       setReviewBusy(false);
     }
@@ -267,7 +269,7 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
   const handleEdgeReview = async (decision: 'confirm' | 'reject') => {
     if (!selectedEdge) return;
     if (!edgeComment.trim()) {
-      setReviewError('Add a review comment that explains the evidence.');
+      setReviewError(t('Add a review comment that explains the evidence.'));
       return;
     }
     setReviewBusy(true);
@@ -284,9 +286,9 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
       setEdgeData(updated);
       setSelectedEdge(updated.find((edge) => edge.id === selectedEdge.id) || null);
       setEdgeComment('');
-      setReviewMessage(`Relation ${decision === 'confirm' ? 'confirmed' : 'rejected'} and recorded as review evidence.`);
+      setReviewMessage(decision === 'confirm' ? t('Relation confirmed and recorded as review evidence.') : t('Relation rejected and recorded as review evidence.'));
     } catch (error) {
-      setReviewError(error instanceof Error ? error.message : 'Unable to review this relation.');
+      setReviewError(error instanceof Error ? error.message : t('Unable to review this relation.'));
     } finally {
       setReviewBusy(false);
     }
@@ -298,7 +300,7 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
         <svg ref={svgRef} width="100%" height="100%" className="w-full h-full" />
         {!selectedNode && (
           <div className="absolute top-4 left-4 bg-white/80 backdrop-blur px-3 py-2 rounded-md border border-slate-200 text-sm text-slate-600 pointer-events-none">
-            Click on any node to view its lineage details and evidence.
+            {t('Click on any node to view its lineage details and evidence.')}
           </div>
         )}
       </div>
@@ -309,28 +311,28 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
           <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-white">
             <h3 className="font-bold text-slate-800 flex items-center space-x-2">
               <FileText size={18} className="text-blue-500" />
-              <span>Node Details</span>
+              <span>{t('Node Details')}</span>
             </h3>
-            <button aria-label="Close node details" onClick={() => setSelectedNode(null)} className="text-slate-400 hover:text-slate-600">
+            <button aria-label={t('Close node details')} onClick={() => setSelectedNode(null)} className="text-slate-400 hover:text-slate-600">
               <X size={20} />
             </button>
           </div>
-          
+
           <div className="p-4 flex-1 overflow-y-auto space-y-6">
             <div>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Label</p>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">{t('Label')}</p>
               <p className="text-lg font-bold text-slate-900 break-all">{selectedNode.label}</p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Type</p>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">{t('Type')}</p>
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-200 text-slate-800">
                   {selectedNode.type}
                 </span>
               </div>
               <div>
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Status</p>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">{t('Status')}</p>
                 <span className={`inline-flex text-xs font-medium rounded-full px-2 py-1 ${
                     selectedNode.status === 'accepted' ? 'bg-green-100 text-green-800' :
                     selectedNode.status === 'conflict' ? 'bg-yellow-100 text-yellow-800' :
@@ -338,7 +340,7 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
                     'bg-blue-100 text-blue-800'
                   }`}
                 >
-                  {selectedNode.status || 'unknown'}
+                  {selectedNode.status || t('unknown')}
                 </span>
               </div>
             </div>
@@ -347,43 +349,43 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
             <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
               <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center space-x-1">
                 <UserCheck size={14} />
-                <span>Human Review</span>
+                <span>{t('Human Review')}</span>
               </p>
-              
+
               {selectedNode.humanConfirmed ? (
                 <div className="flex items-center space-x-2 text-green-600 bg-green-50 p-2 rounded border border-green-100">
                   <CheckCircle size={16} />
-                  <span className="text-sm font-medium">Verified by human</span>
+                  <span className="text-sm font-medium">{t('Verified by human')}</span>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <p className="text-sm text-slate-600">This node's role in the lineage is inferred. Please confirm if it is correct.</p>
-                  <button 
+                  <p className="text-sm text-slate-600">{t("This node's role in the lineage is inferred. Please confirm if it is correct.")}</p>
+                  <button
                     onClick={handleConfirmNode}
                     disabled={reviewBusy}
                     className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2 px-4 rounded transition-colors"
                   >
-                    {reviewBusy ? 'Recording…' : 'Confirm & Accept'}
+                    {reviewBusy ? t('Recording…') : t('Confirm & Accept')}
                   </button>
                 </div>
               )}
 
               {selectedNode.type !== 'Project' && (
                 <div className="mt-4 pt-4 border-t border-slate-200 space-y-2">
-                  <label htmlFor="status-proposal" className="block text-xs font-semibold text-slate-600">Propose a status</label>
+                  <label htmlFor="status-proposal" className="block text-xs font-semibold text-slate-600">{t('Propose a status')}</label>
                   <select
                     id="status-proposal"
                     value={proposalStatus}
                     onChange={(event) => setProposalStatus(event.target.value as typeof proposalStatus)}
                     className="w-full rounded border border-slate-300 bg-white px-2 py-2 text-sm"
                   >
-                    <option value="candidate">Candidate</option>
-                    <option value="accepted">Accepted</option>
-                    <option value="superseded">Superseded</option>
-                    <option value="quarantined">Quarantined</option>
-                    <option value="duplicate">Duplicate</option>
+                    <option value="candidate">{t('Candidate')}</option>
+                    <option value="accepted">{t('Accepted')}</option>
+                    <option value="superseded">{t('Superseded')}</option>
+                    <option value="quarantined">{t('Quarantined')}</option>
+                    <option value="duplicate">{t('Duplicate')}</option>
                   </select>
-                  <label htmlFor="status-reason" className="block text-xs font-semibold text-slate-600">Reason</label>
+                  <label htmlFor="status-reason" className="block text-xs font-semibold text-slate-600">{t('Reason')}</label>
                   <textarea
                     id="status-reason"
                     value={proposalReason}
@@ -391,14 +393,14 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
                     maxLength={2000}
                     rows={3}
                     className="w-full rounded border border-slate-300 bg-white px-2 py-2 text-sm"
-                    placeholder="Evidence and replacement details"
+                    placeholder={t('Evidence and replacement details')}
                   />
                   <button
                     onClick={handleStatusProposal}
                     disabled={reviewBusy}
                     className="w-full rounded bg-slate-800 px-3 py-2 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-60"
                   >
-                    Submit proposal
+                    {t('Submit proposal')}
                   </button>
                 </div>
               )}
@@ -410,15 +412,15 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
               <div>
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1 flex items-center space-x-1">
                   <Activity size={14} />
-                  <span>Reproducibility</span>
+                  <span>{t('Reproducibility')}</span>
                 </p>
                 <div className="flex items-center space-x-2 mt-1">
                   <span className="text-2xl font-bold text-slate-800">{selectedNode.reproducibility}</span>
                   <span className="text-sm text-slate-500">
-                    {selectedNode.reproducibility === 'R4' ? '(Verified)' :
-                     selectedNode.reproducibility === 'R3' ? '(Runnable)' :
-                     selectedNode.reproducibility === 'R2' ? '(Traceable)' :
-                     selectedNode.reproducibility === 'R1' ? '(Locatable)' : '(Unknown)'}
+                    {selectedNode.reproducibility === 'R4' ? t('(Verified)') :
+                     selectedNode.reproducibility === 'R3' ? t('(Runnable)') :
+                     selectedNode.reproducibility === 'R2' ? t('(Traceable)') :
+                     selectedNode.reproducibility === 'R1' ? t('(Locatable)') : t('(Unknown)')}
                   </span>
                 </div>
               </div>
@@ -428,7 +430,7 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
               <div>
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center space-x-1">
                   <Link size={14} />
-                  <span>Evidence IDs</span>
+                  <span>{t('Evidence IDs')}</span>
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {selectedNode.evidenceIds.map(id => (
@@ -442,7 +444,7 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
 
             {selectedNode.details && Object.keys(selectedNode.details).length > 0 && (
               <div>
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Metadata</p>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">{t('Metadata')}</p>
                 <div className="bg-white border border-slate-200 rounded-md overflow-hidden">
                   {Object.entries(selectedNode.details).map(([key, value], idx) => (
                     <div key={key} className={`px-3 py-2 text-sm flex flex-col ${idx !== 0 ? 'border-t border-slate-100' : ''}`}>
@@ -458,7 +460,7 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
               <div className="bg-red-50 border border-red-200 rounded-md p-3 flex items-start space-x-2">
                 <AlertCircle size={16} className="text-red-600 mt-0.5 flex-shrink-0" />
                 <p className="text-sm text-red-800">
-                  This node has an active finding. Please check the Audit Findings tab for resolution steps.
+                  {t('This node has an active finding. Please check the Audit Findings tab for resolution steps.')}
                 </p>
               </div>
             ) : null}
@@ -470,22 +472,22 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
           <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-white">
             <h3 className="font-bold text-slate-800 flex items-center space-x-2">
               <Link size={18} className="text-blue-500" />
-              <span>Relation Evidence</span>
+              <span>{t('Relation Evidence')}</span>
             </h3>
-            <button aria-label="Close relation details" onClick={() => setSelectedEdge(null)} className="text-slate-400 hover:text-slate-600">
+            <button aria-label={t('Close relation details')} onClick={() => setSelectedEdge(null)} className="text-slate-400 hover:text-slate-600">
               <X size={20} />
             </button>
           </div>
           <div className="p-4 flex-1 overflow-y-auto space-y-4">
             <div className="rounded border border-slate-200 bg-white p-3 text-sm">
-              <p><span className="font-semibold">Relation:</span> {selectedEdge.relation}</p>
-              <p className="mt-1 break-all"><span className="font-semibold">From:</span> {typeof selectedEdge.source === 'string' ? selectedEdge.source : ''}</p>
-              <p className="mt-1 break-all"><span className="font-semibold">To:</span> {typeof selectedEdge.target === 'string' ? selectedEdge.target : ''}</p>
-              <p className="mt-1"><span className="font-semibold">Confidence:</span> {selectedEdge.confidence}</p>
-              <p className="mt-1"><span className="font-semibold">Review:</span> {selectedEdge.reviewStatus || 'not reviewed'}</p>
+              <p><span className="font-semibold">{t('Relation:')}</span> {selectedEdge.relation}</p>
+              <p className="mt-1 break-all"><span className="font-semibold">{t('From:')}</span> {typeof selectedEdge.source === 'string' ? selectedEdge.source : ''}</p>
+              <p className="mt-1 break-all"><span className="font-semibold">{t('To:')}</span> {typeof selectedEdge.target === 'string' ? selectedEdge.target : ''}</p>
+              <p className="mt-1"><span className="font-semibold">{t('Confidence:')}</span> {selectedEdge.confidence}</p>
+              <p className="mt-1"><span className="font-semibold">{t('Review:')}</span> {selectedEdge.reviewStatus || t('not reviewed')}</p>
             </div>
             <div>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Evidence IDs</p>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">{t('Evidence IDs')}</p>
               <div className="flex flex-wrap gap-2">
                 {(selectedEdge.evidenceIds || []).map((id) => (
                   <span key={id} className="px-2 py-1 bg-blue-50 text-blue-700 border border-blue-200 rounded text-xs font-mono">
@@ -494,7 +496,7 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
                 ))}
               </div>
             </div>
-            <label htmlFor="edge-review-comment" className="block text-xs font-semibold text-slate-600">Review comment</label>
+            <label htmlFor="edge-review-comment" className="block text-xs font-semibold text-slate-600">{t('Review comment')}</label>
             <textarea
               id="edge-review-comment"
               value={edgeComment}
@@ -502,7 +504,7 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
               maxLength={2000}
               rows={5}
               className="w-full rounded border border-slate-300 bg-white px-2 py-2 text-sm"
-              placeholder="Describe the evidence used for this decision"
+              placeholder={t('Describe the evidence used for this decision')}
             />
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -510,14 +512,14 @@ export const LineageGraph: React.FC<LineageGraphProps> = ({ nodes: initialNodes,
                 disabled={reviewBusy}
                 className="rounded bg-green-700 px-3 py-2 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-60"
               >
-                Confirm
+                {t('Confirm')}
               </button>
               <button
                 onClick={() => handleEdgeReview('reject')}
                 disabled={reviewBusy}
                 className="rounded bg-red-700 px-3 py-2 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-60"
               >
-                Reject
+                {t('Reject')}
               </button>
             </div>
             {reviewMessage && <p role="status" className="text-sm text-green-700">{reviewMessage}</p>}

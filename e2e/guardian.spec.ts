@@ -2,16 +2,16 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 
 const routes = [
-  { link: 'Implementation Status', heading: 'Implementation Status', hash: '#/checklist' },
-  { link: 'Dashboard', heading: /Project Overview:/, hash: '#/dashboard' },
-  { link: 'Lineage Explorer', heading: 'Lineage Explorer', hash: '#/lineage' },
-  { link: 'Directory Diff', heading: 'Non-Git Directory Tracking', hash: '#/snapshots' },
-  { link: 'Audit Findings', heading: 'Audit Findings', hash: '#/findings' },
-  { link: 'Guardian Agent', heading: 'Guardian Agent', hash: '#/agent' },
-  { link: 'Workspace Handoff', heading: 'Workspace Handoff', hash: '#/handoff' },
-  { link: 'Upload Center', heading: 'Upload Center', hash: '#/upload' },
-  { link: 'System Setup', heading: 'System Setup', hash: '#/setup' },
-  { link: 'Security & Audit', heading: 'Security & Audit', hash: '#/security' }
+  { link: '实现状态', heading: '实现状态', hash: '#/checklist' },
+  { link: '仪表盘', heading: /项目概览：/, hash: '#/dashboard' },
+  { link: '溯源图谱', heading: '溯源图谱', hash: '#/lineage' },
+  { link: '目录差异', heading: '非 Git 目录追踪', hash: '#/snapshots' },
+  { link: '审计发现', heading: '审计发现', hash: '#/findings' },
+  { link: '守护代理', heading: '守护代理', hash: '#/agent' },
+  { link: '交接工作区', heading: '交接工作区', hash: '#/handoff' },
+  { link: '上传中心', heading: '上传中心', hash: '#/upload' },
+  { link: '系统设置', heading: '系统设置', hash: '#/setup' },
+  { link: '安全与审计', heading: '安全与审计', hash: '#/security' }
 ];
 
 test('live console routes load without browser errors', async ({ page }) => {

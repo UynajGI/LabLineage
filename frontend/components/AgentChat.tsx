@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import type { AgentConversation, AgentTraceItem } from '../types';
+import { useI18n } from '../i18n';
 
 interface Message {
   id: string;
@@ -34,6 +35,7 @@ function renderText(text: string) {
 }
 
 export const AgentChat: React.FC = () => {
+  const { t } = useI18n();
   const [messages, setMessages] = useState<Message[]>([{
     id: 'welcome',
     role: 'agent',
@@ -60,7 +62,7 @@ export const AgentChat: React.FC = () => {
           setMessages((current) => [...current, {
             id: crypto.randomUUID(),
             role: 'system',
-            content: error instanceof Error ? error.message : 'Unable to initialize persistent Agent session.',
+            content: error instanceof Error ? error.message : t('Unable to initialize persistent Agent session.'),
             isError: true
           }]);
         }
@@ -69,7 +71,7 @@ export const AgentChat: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -92,7 +94,7 @@ export const AgentChat: React.FC = () => {
       }]);
       setConversations((current) => current.map((conversation) =>
         conversation.id === conversationId
-          ? { ...conversation, title: conversation.title === 'New conversation' ? message.slice(0, 120) : conversation.title, updatedAt: new Date().toISOString() }
+          ? { ...conversation, title: conversation.title === t('New conversation') ? message.slice(0, 120) : conversation.title, updatedAt: new Date().toISOString() }
           : conversation
       ));
     } catch (error) {
@@ -165,7 +167,7 @@ export const AgentChat: React.FC = () => {
         <div className="flex items-center gap-3">
           <div className="rounded-lg bg-blue-600 p-2 text-white"><Bot size={21} /></div>
           <div>
-            <h2 className="font-semibold text-slate-900">Guardian Agent</h2>
+            <h2 className="font-semibold text-slate-900">{t('Guardian Agent')}</h2>
             <p className="text-xs text-slate-500">@google/adk · 后端保管密钥 · 只读证据工具</p>
           </div>
         </div>
@@ -195,7 +197,7 @@ export const AgentChat: React.FC = () => {
             <RotateCcw size={15} />
           </button>
           <div className="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
-            <ShieldCheck size={14} /> Evidence-first
+            <ShieldCheck size={14} /> {t('Evidence-first')}
           </div>
         </div>
       </header>
@@ -222,7 +224,7 @@ export const AgentChat: React.FC = () => {
               {message.trace && message.trace.length > 0 && (
                 <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3 text-left">
                   <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
-                    <GitBranch size={13} /> Agent execution trace
+                    <GitBranch size={13} /> {t('Agent execution trace')}
                   </div>
                   <ol className="space-y-2 border-l border-slate-200 pl-3">
                     {message.trace.map((item) => (

@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Clock, RefreshCw, ShieldAlert } from 'lucide-react';
 import { api } from '../services/api';
+import { useI18n } from '../i18n';
 
 export const ImplementationChecklist: React.FC = () => {
+  const { t } = useI18n();
   type Capability = Awaited<ReturnType<typeof api.getCapabilities>>['capabilities'][number];
   const [items, setItems] = useState<Capability[]>([]);
   const [error, setError] = useState('');
@@ -14,7 +16,7 @@ export const ImplementationChecklist: React.FC = () => {
     try {
       setItems((await api.getCapabilities()).capabilities);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Unable to load capability status');
+      setError(loadError instanceof Error ? loadError.message : t('Unable to load capability status'));
     } finally {
       setLoading(false);
     }
@@ -34,7 +36,7 @@ export const ImplementationChecklist: React.FC = () => {
       </div>
       <ul className="divide-y divide-slate-200">
         {list.length === 0 ? (
-          <li className="p-4 text-sm text-slate-500 italic">No items in this category.</li>
+          <li className="p-4 text-sm text-slate-500 italic">{t('No items in this category.')}</li>
         ) : list.map((item) => (
           <li key={item.id} className="p-4 hover:bg-slate-50 transition-colors flex items-start justify-between">
             <div className="flex items-start space-x-4">
@@ -53,19 +55,19 @@ export const ImplementationChecklist: React.FC = () => {
     <div
       className="space-y-6 max-w-4xl mx-auto h-full overflow-y-auto pb-12"
       tabIndex={0}
-      aria-label="Implementation status details"
+      aria-label={t('Implementation status details')}
     >
       <div>
-        <h2 className="text-2xl font-bold text-slate-800">Implementation Status</h2>
-        <p className="text-slate-600 mt-1">Live capability status reported by the backend. Mock completion states are not used.</p>
+        <h2 className="text-2xl font-bold text-slate-800">{t('Implementation Status')}</h2>
+        <p className="text-slate-600 mt-1">{t('Live capability status reported by the backend. Mock completion states are not used.')}</p>
       </div>
 
-      {loading && <div className="p-6 text-slate-600 flex items-center gap-2"><RefreshCw className="animate-spin" size={18} /> Loading live status…</div>}
+      {loading && <div className="p-6 text-slate-600 flex items-center gap-2"><RefreshCw className="animate-spin" size={18} /> {t('Loading live status…')}</div>}
       {error && <div className="p-4 bg-red-50 border border-red-200 text-red-800 rounded-lg">{error}</div>}
       {!loading && !error && <>
-        {renderList(completed, <CheckCircle2 className="text-green-600" size={20} />, "Implemented / Configured", "bg-green-50")}
-        {renderList(development, <Clock className="text-amber-600" size={20} />, "Development Mode", "bg-amber-50")}
-        {renderList(blocked, <ShieldAlert className="text-red-600" size={20} />, "Requires Configuration or External Validation", "bg-red-50")}
+        {renderList(completed, <CheckCircle2 className="text-green-600" size={20} />, t('Implemented / Configured'), "bg-green-50")}
+        {renderList(development, <Clock className="text-amber-600" size={20} />, t('Development Mode'), "bg-amber-50")}
+        {renderList(blocked, <ShieldAlert className="text-red-600" size={20} />, t('Requires Configuration or External Validation'), "bg-red-50")}
       </>}
     </div>
   );

@@ -2,10 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Loader2, Save, ShieldAlert } from 'lucide-react';
 import { api } from '../services/api';
 import type { SetupConfig } from '../types';
+import { useI18n } from '../i18n';
 
 type CapabilityResponse = Awaited<ReturnType<typeof api.getCapabilities>>;
 
 export const SystemSetup: React.FC = () => {
+  const { t } = useI18n();
   const [config, setConfig] = useState<SetupConfig | null>(null);
   const [status, setStatus] = useState<CapabilityResponse | null>(null);
   const [saving, setSaving] = useState(false);
@@ -19,7 +21,7 @@ export const SystemSetup: React.FC = () => {
       setConfig(setup);
       setStatus(capabilities);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Unable to load setup');
+      setError(loadError instanceof Error ? loadError.message : t('Unable to load setup'));
     }
   };
 
@@ -36,9 +38,9 @@ export const SystemSetup: React.FC = () => {
     setError('');
     try {
       await api.saveSetupConfig(config);
-      setMessage('Organization and handoff settings saved.');
+      setMessage(t('Organization and handoff settings saved.'));
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Unable to save setup');
+      setError(saveError instanceof Error ? saveError.message : t('Unable to save setup'));
     } finally {
       setSaving(false);
     }
@@ -49,27 +51,27 @@ export const SystemSetup: React.FC = () => {
   }
 
   const fields: Array<{ key: keyof SetupConfig; label: string; type?: string }> = [
-    { key: 'institutionName', label: 'Institution' },
-    { key: 'labName', label: 'Lab' },
-    { key: 'adminDisplayName', label: 'Administrator name' },
-    { key: 'adminEmail', label: 'Administrator email', type: 'email' },
-    { key: 'defaultProjectName', label: 'Default project name' },
-    { key: 'defaultProjectSlug', label: 'Default project slug' },
-    { key: 'departingMemberEmail', label: 'Departing member', type: 'email' },
-    { key: 'receivingMemberEmail', label: 'Receiving member', type: 'email' },
-    { key: 'reviewerEmail', label: 'Reviewer', type: 'email' },
-    { key: 'handoffDueDate', label: 'Handoff due date', type: 'date' }
+    { key: 'institutionName', label: t('Institution') },
+    { key: 'labName', label: t('Lab') },
+    { key: 'adminDisplayName', label: t('Administrator name') },
+    { key: 'adminEmail', label: t('Administrator email'), type: 'email' },
+    { key: 'defaultProjectName', label: t('Default project name') },
+    { key: 'defaultProjectSlug', label: t('Default project slug') },
+    { key: 'departingMemberEmail', label: t('Departing member'), type: 'email' },
+    { key: 'receivingMemberEmail', label: t('Receiving member'), type: 'email' },
+    { key: 'reviewerEmail', label: t('Reviewer'), type: 'email' },
+    { key: 'handoffDueDate', label: t('Handoff due date'), type: 'date' }
   ];
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-12">
       <div>
-        <h2 className="text-2xl font-bold text-slate-800">System Setup</h2>
-        <p className="text-slate-600 mt-1">Editable application settings and live integration readiness. Secrets are configured on the server, never in this browser form.</p>
+        <h2 className="text-2xl font-bold text-slate-800">{t('System Setup')}</h2>
+        <p className="text-slate-600 mt-1">{t('Editable application settings and live integration readiness. Secrets are configured on the server, never in this browser form.')}</p>
       </div>
 
       <section className="bg-white border border-slate-200 rounded-lg p-6">
-        <h3 className="font-semibold text-lg mb-4">Organization and handoff</h3>
+        <h3 className="font-semibold text-lg mb-4">{t('Organization and handoff')}</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {fields.map((field) => (
             <label key={field.key} className="text-sm font-medium text-slate-700">
@@ -83,23 +85,23 @@ export const SystemSetup: React.FC = () => {
             </label>
           ))}
           <label className="text-sm font-medium text-slate-700">
-            Default region
+            {t('Default region')}
             <input value={config.defaultRegion} onChange={(event) => update('defaultRegion', event.target.value)} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md" />
           </label>
           <label className="text-sm font-medium text-slate-700">
-            Default timezone
+            {t('Default timezone')}
             <input value={config.defaultTimezone} onChange={(event) => update('defaultTimezone', event.target.value)} className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md" />
           </label>
         </div>
         <div className="flex justify-end mt-5">
           <button onClick={save} disabled={saving} className="flex gap-2 items-center px-5 py-2.5 bg-blue-600 text-white rounded-md disabled:opacity-50">
-            {saving ? <Loader2 className="animate-spin" size={17} /> : <Save size={17} />} Save settings
+            {saving ? <Loader2 className="animate-spin" size={17} /> : <Save size={17} />} {t('Save settings')}
           </button>
         </div>
       </section>
 
       <section className="bg-white border border-slate-200 rounded-lg p-6">
-        <h3 className="font-semibold text-lg mb-4">Live integration readiness</h3>
+        <h3 className="font-semibold text-lg mb-4">{t('Live integration readiness')}</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {status.capabilities.map((item) => {
             const ready = item.state === 'ready' || item.state === 'configured';

@@ -1,6 +1,7 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { LayoutDashboard, Network, AlertTriangle, MessageSquare, ShieldCheck, SendToBack, History, UploadCloud, Settings, ShieldAlert, ListChecks } from 'lucide-react';
 import { api } from './services/api';
+import { useI18n } from './i18n';
 import {
   beginLogin,
   completeLoginIfPresent,
@@ -41,6 +42,7 @@ function routeFromHash(): string {
 }
 
 const App: React.FC = () => {
+  const { t, locale, toggleLocale } = useI18n();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [summary, setSummary] = useState<ProjectSummary>(emptySummary);
   const [nodes, setNodes] = useState<LineageNode[]>([]);
@@ -64,7 +66,7 @@ const App: React.FC = () => {
     setLoadError('');
     try {
       const availableProjects = await api.listProjects();
-      if (!availableProjects.length) throw new Error('No project exists. Create a project in the API first.');
+      if (!availableProjects.length) throw new Error(t('No project exists. Create a project in the API first.'));
       const stored = localStorage.getItem('lablineage.activeProjectId');
       const target = requestedProjectId ||
         (stored && availableProjects.some((project) => project.id === stored) ? stored : availableProjects[0].id);
@@ -91,7 +93,7 @@ const App: React.FC = () => {
       setLoadState('connected');
     } catch (error) {
       if (sequence !== loadSequence.current) return;
-      setLoadError(error instanceof Error ? error.message : 'Backend request failed');
+      setLoadError(error instanceof Error ? error.message : t('Backend request failed'));
       setLoadState('error');
     }
   };
@@ -109,13 +111,14 @@ const App: React.FC = () => {
       })
       .catch((error) => {
         if (!active) return;
-        setLoadError(error instanceof Error ? error.message : 'Authentication initialization failed');
+        setLoadError(error instanceof Error ? error.message : t('Authentication initialization failed'));
         setLoadState('error');
       });
     return () => {
       active = false;
       loadSequence.current += 1;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -132,27 +135,27 @@ const App: React.FC = () => {
   }, []);
 
   const navItems = [
-    { path: '/checklist', label: 'Implementation Status', icon: <ListChecks size={20} /> },
-    { path: '/dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
-    { path: '/lineage', label: 'Lineage Explorer', icon: <Network size={20} /> },
-    { path: '/snapshots', label: 'Directory Diff', icon: <History size={20} /> },
-    { path: '/findings', label: 'Audit Findings', icon: <AlertTriangle size={20} /> },
-    { path: '/agent', label: 'Guardian Agent', icon: <MessageSquare size={20} /> },
-    { path: '/handoff', label: 'Workspace Handoff', icon: <SendToBack size={20} /> },
+    { path: '/checklist', label: t('Implementation Status'), icon: <ListChecks size={20} /> },
+    { path: '/dashboard', label: t('Dashboard'), icon: <LayoutDashboard size={20} /> },
+    { path: '/lineage', label: t('Lineage Explorer'), icon: <Network size={20} /> },
+    { path: '/snapshots', label: t('Directory Diff'), icon: <History size={20} /> },
+    { path: '/findings', label: t('Audit Findings'), icon: <AlertTriangle size={20} /> },
+    { path: '/agent', label: t('Guardian Agent'), icon: <MessageSquare size={20} /> },
+    { path: '/handoff', label: t('Workspace Handoff'), icon: <SendToBack size={20} /> },
   ];
 
   const adminNavItems = [
-    { path: '/upload', label: 'Upload Center', icon: <UploadCloud size={20} />, requiredRole: 'editor' },
-    { path: '/setup', label: 'System Setup', icon: <Settings size={20} />, requiredRole: 'admin' },
-    { path: '/security', label: 'Security & Audit', icon: <ShieldAlert size={20} />, requiredRole: 'admin' },
+    { path: '/upload', label: t('Upload Center'), icon: <UploadCloud size={20} />, requiredRole: 'editor' },
+    { path: '/setup', label: t('System Setup'), icon: <Settings size={20} />, requiredRole: 'admin' },
+    { path: '/security', label: t('Security & Audit'), icon: <ShieldAlert size={20} />, requiredRole: 'admin' },
   ];
   const roleRank: Record<string, number> = { viewer: 10, auditor: 20, editor: 30, admin: 40 };
   const actorRank = Math.max(0, ...actor.roles.map((role) => roleRank[role] || 0));
   const visibleAdminNavItems = adminNavItems.filter((item) => actorRank >= roleRank[item.requiredRole]);
   const accessDenied = (
     <div className="rounded-lg border border-red-200 bg-red-50 p-8 text-center">
-      <h2 className="text-xl font-bold text-red-900">Access denied</h2>
-      <p className="mt-2 text-sm text-red-800">Your current role does not permit this administration page.</p>
+      <h2 className="text-xl font-bold text-red-900">{t('Access denied')}</h2>
+      <p className="mt-2 text-sm text-red-800">{t('Your current role does not permit this administration page.')}</p>
     </div>
   );
   const pageContent = (() => {
@@ -161,8 +164,8 @@ const App: React.FC = () => {
       case '/lineage': return (
         <div className="space-y-4 h-full flex flex-col">
           <div>
-            <h2 className="text-2xl font-bold text-slate-800">Lineage Explorer</h2>
-            <p className="text-slate-600">Visualizing dependencies for key conclusions and figures. Review and confirm inferred relationships.</p>
+            <h2 className="text-2xl font-bold text-slate-800">{t('Lineage Explorer')}</h2>
+            <p className="text-slate-600">{t('Visualizing dependencies for key conclusions and figures. Review and confirm inferred relationships.')}</p>
           </div>
           <div className="flex-1 min-h-[600px]">
             <LineageGraph nodes={nodes} edges={edges} />
@@ -173,8 +176,8 @@ const App: React.FC = () => {
       case '/findings': return <FindingsList findings={findings} />;
       case '/agent': return (
         <div className="space-y-4">
-          <h2 className="text-2xl font-bold text-slate-800">Guardian Agent</h2>
-          <p className="text-slate-600">Ask the Gemini-powered agent to analyze lineage, explain conflicts, or draft handoff emails.</p>
+          <h2 className="text-2xl font-bold text-slate-800">{t('Guardian Agent')}</h2>
+          <p className="text-slate-600">{t('Ask the Gemini-powered agent to analyze lineage, explain conflicts, or draft handoff emails.')}</p>
           <AgentChat />
         </div>
       );
@@ -200,13 +203,13 @@ const App: React.FC = () => {
               <ShieldCheck className="text-blue-500" size={28} />
               <span className="text-xl font-bold text-white tracking-tight">LabLineage</span>
             </div>
-            
+
             <div className="p-4">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Current Project</p>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{t('Current Project')}</p>
               <div className="bg-slate-800 rounded p-2 text-sm text-slate-200 border border-slate-700">
                 <span className="bg-emerald-500 text-emerald-950 text-[10px] px-1.5 py-0.5 rounded mr-2 font-bold">{actor.kind.toUpperCase()}</span>
                 <select
-                  aria-label="Current project"
+                  aria-label={t('Current Project')}
                   value={summary.id}
                   onChange={(event) => void loadProject(event.target.value)}
                   className="mt-2 w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-100"
@@ -233,10 +236,10 @@ const App: React.FC = () => {
 
               {visibleAdminNavItems.length > 0 && (
                 <div className="pt-4 pb-2">
-                  <p className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Administration</p>
+                  <p className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">{t('Administration')}</p>
                 </div>
               )}
-              
+
               {visibleAdminNavItems.map((item) => (
                 <a
                   key={item.path}
@@ -259,7 +262,7 @@ const App: React.FC = () => {
                 </div>
                 <div className="text-sm">
                   <p className="text-white font-medium truncate max-w-36">{actor.subject}</p>
-                  <p className="text-slate-400 text-xs">{actor.roles.join(', ') || 'no role'}</p>
+                  <p className="text-slate-400 text-xs">{actor.roles.join(', ') || t('no role')}</p>
                 </div>
               </div>
             </div>
@@ -269,37 +272,45 @@ const App: React.FC = () => {
           <main className="flex-1 flex flex-col overflow-hidden relative">
             <header className="bg-white border-b border-slate-200 h-14 flex items-center px-6 justify-between flex-shrink-0">
               <div className="flex items-center">
-                <button 
+                <button
                   onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                  aria-label={isSidebarOpen ? 'Collapse navigation' : 'Expand navigation'}
+                  aria-label={isSidebarOpen ? t('Collapse navigation') : t('Expand navigation')}
                   aria-expanded={isSidebarOpen}
                   className="text-slate-500 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded mr-4"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
                 </button>
-                <h2 className="text-lg font-semibold text-slate-800">Handoff Audit Mode</h2>
+                <h2 className="text-lg font-semibold text-slate-800">{t('Handoff Audit Mode')}</h2>
               </div>
               <div className="flex items-center space-x-4">
+                <button
+                  type="button"
+                  onClick={toggleLocale}
+                  aria-label={locale === 'zh' ? 'Switch to English' : '切换到中文'}
+                  className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-blue-500"
+                >
+                  {locale === 'zh' ? 'EN' : '中文'}
+                </button>
                 {authConfig?.enabled && (
                   <button
                     type="button"
                     onClick={() => {
                       if (authenticated) logout();
                       else void beginLogin(authConfig).catch((error) => {
-                        setLoadError(error instanceof Error ? error.message : 'Unable to start sign-in');
+                        setLoadError(error instanceof Error ? error.message : t('Unable to start sign-in'));
                         setLoadState('error');
                       });
                     }}
                     className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-blue-500"
                   >
-                    {authenticated ? 'Sign out' : 'Sign in'}
+                    {authenticated ? t('Sign out') : t('Sign in')}
                   </button>
                 )}
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 border border-slate-200">
                   {actor.kind}
                 </span>
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-200">
-                  {loadState === 'connected' ? 'Connected' : loadState}
+                  {loadState === 'connected' ? t('Connected') : loadState}
                 </span>
               </div>
             </header>
@@ -307,10 +318,10 @@ const App: React.FC = () => {
             <div
               className="flex-1 overflow-auto p-6"
               tabIndex={0}
-              aria-label="Page content"
+              aria-label={t('Page content')}
             >
               <div className="max-w-6xl mx-auto h-full">
-                <Suspense fallback={<div className="p-12 text-center text-slate-500">Loading page…</div>}>
+                <Suspense fallback={<div className="p-12 text-center text-slate-500">{t('Loading page…')}</div>}>
                 {pageContent}
                 </Suspense>
               </div>

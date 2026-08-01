@@ -2,6 +2,7 @@ import React from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { FileText, AlertTriangle, CheckCircle, Activity } from 'lucide-react';
 import { ProjectSummary } from '../types';
+import { useI18n } from '../i18n';
 
 interface DashboardProps {
   summary: ProjectSummary;
@@ -19,6 +20,7 @@ const getScoreColor = (score: string) => {
 };
 
 export const Dashboard: React.FC<DashboardProps> = ({ summary }) => {
+  const { t } = useI18n();
   const chartData = Object.entries(summary.reproducibilityScores).map(([level, count]) => ({
     name: level,
     count
@@ -28,8 +30,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ summary }) => {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-slate-800">Project Overview: {summary.name}</h1>
-        <span className="text-sm text-slate-500">Last scanned: {new Date(summary.lastScan).toLocaleString()}</span>
+        <h1 className="text-2xl font-bold text-slate-800">{t('Project Overview:')} {summary.name}</h1>
+        <span className="text-sm text-slate-500">{t('Last scanned:')} {new Date(summary.lastScan).toLocaleString()}</span>
       </div>
 
       {/* Stats Row */}
@@ -39,17 +41,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ summary }) => {
             <FileText size={24} />
           </div>
           <div>
-            <p className="text-sm text-slate-500 font-medium">Total Assets</p>
+            <p className="text-sm text-slate-500 font-medium">{t('Total Assets')}</p>
             <p className="text-2xl font-bold text-slate-800">{summary.totalAssets}</p>
           </div>
         </div>
-        
+
         <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center space-x-4">
           <div className="p-3 bg-green-100 text-green-600 rounded-full">
             <CheckCircle size={24} />
           </div>
           <div>
-            <p className="text-sm text-slate-500 font-medium">R4 (Verified)</p>
+            <p className="text-sm text-slate-500 font-medium">{t('R4 (Verified)')}</p>
             <p className="text-2xl font-bold text-slate-800">{summary.reproducibilityScores['R4']}</p>
           </div>
         </div>
@@ -59,7 +61,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ summary }) => {
             <Activity size={24} />
           </div>
           <div>
-            <p className="text-sm text-slate-500 font-medium">R2 (Traceable)</p>
+            <p className="text-sm text-slate-500 font-medium">{t('R2 (Traceable)')}</p>
             <p className="text-2xl font-bold text-slate-800">{summary.reproducibilityScores['R2']}</p>
           </div>
         </div>
@@ -69,7 +71,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ summary }) => {
             <AlertTriangle size={24} />
           </div>
           <div>
-            <p className="text-sm text-slate-500 font-medium">Open Findings</p>
+            <p className="text-sm text-slate-500 font-medium">{t('Open Findings')}</p>
             <p className="text-2xl font-bold text-slate-800">{summary.openFindings}</p>
           </div>
         </div>
@@ -78,7 +80,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ summary }) => {
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-800 mb-4">Reproducibility Distribution</h2>
+          <h2 className="text-lg font-semibold text-slate-800 mb-4">{t('Reproducibility Distribution')}</h2>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
@@ -95,12 +97,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ summary }) => {
             </ResponsiveContainer>
           </div>
           <p className="text-xs text-slate-500 mt-2 text-center">
-            R4: Verified | R3: Runnable | R2: Traceable | R1: Locatable | R0: Unknown
+            {t('R4: Verified | R3: Runnable | R2: Traceable | R1: Locatable | R0: Unknown')}
           </p>
         </div>
 
         <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-800 mb-4">Handoff Readiness</h2>
+          <h2 className="text-lg font-semibold text-slate-800 mb-4">{t('Handoff Readiness')}</h2>
           <div className="flex flex-col items-center justify-center h-64 space-y-4">
              <div className="relative w-32 h-32">
                 <svg className="w-full h-full" viewBox="0 0 36 36">
@@ -125,7 +127,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ summary }) => {
                 </div>
              </div>
              <p className="text-sm text-slate-600 text-center max-w-xs">
-               Handoff readiness has <span className="font-bold text-red-700">{summary.openFindings} open findings</span>. Resolve P0 and P1 issues to proceed.
+               {t('Handoff readiness has')} <span className="font-bold text-red-700">{summary.openFindings} {t('open findings')}</span>. {t('Resolve P0 and P1 issues to proceed.')}
              </p>
           </div>
         </div>
