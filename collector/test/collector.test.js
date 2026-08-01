@@ -278,6 +278,31 @@ test('bundle upload retries transient responses with a stable idempotency key', 
   assert.equal(requests[1].headers['idempotency-key'], 'bundle-retry');
 });
 
+test('paired collector upload targets the project analysis endpoint without a bearer secret', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'lablineage-paired-upload-'));
+  const filename = path.join(root, 'bundle.json');
+  await writeFile(filename, JSON.stringify({
+    schema_version: 'lablineage.manifest.v1',
+    bundle_id: 'paired-bundle',
+    project_key: 'project',
+    records: []
+  }));
+  let request;
+  const result = await uploadBundle({
+    filename,
+    apiUrl: 'https://guardian.example/base',
+    projectId: 'project with spaces',
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return new Response(JSON.stringify({ runId: 'analysis_1', statusUrl: '/status' }), { status: 202 });
+    }
+  });
+  assert.equal(result.result.runId, 'analysis_1');
+  assert.equal(request.url, 'https://guardian.example/v1/projects/project%20with%20spaces/collector-runs');
+  assert.equal('authorization' in request.init.headers, false);
+  assert.equal(request.init.headers['idempotency-key'], 'paired-bundle');
+});
+
 test('upload queue resumes after failure without resending completed bundles', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'lablineage-queue-'));
   const stateFile = path.join(root, 'upload-state.json');

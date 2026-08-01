@@ -68,6 +68,23 @@ export async function loadProject({ root = process.cwd(), configFile, expectedPr
   return config;
 }
 
+export async function saveProjectConnection(config, connection, { configFile } = {}) {
+  const filename = path.resolve(configFile || path.join(config.root, '.lablineage', PROJECT_FILE));
+  const updated = {
+    ...config,
+    remote: {
+      api_url: connection.apiUrl,
+      project_id: connection.projectId,
+      collector_id: connection.collectorId,
+      source_id: connection.sourceId,
+      submit_url: connection.submitUrl,
+      paired_at: connection.pairedAt || new Date().toISOString(),
+    },
+  };
+  await atomicWrite(filename, `${JSON.stringify(updated, null, 2)}\n`);
+  return updated;
+}
+
 export function snapshotId(manifest) {
   const timestamp = manifest.captured_at.replace(/[-:.TZ]/g, '').slice(0, 14);
   return `snap_${timestamp}_${manifest.bundle_id.replace(/^bnd_/, '').slice(0, 8)}`;

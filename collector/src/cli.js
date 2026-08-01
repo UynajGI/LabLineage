@@ -10,6 +10,7 @@ import {
   initializeProject,
   loadProject,
   resolveSnapshot,
+  saveProjectConnection,
   storeSnapshot
 } from './project.js';
 import { attachRunEvidence, captureRun } from './run.js';
@@ -39,6 +40,8 @@ function help() {
 
 Project workflow:
   init   --project <key> --root <dir>
+  pair   --project <key> [--root <dir>] --url <api-url> --pairing <id> --code <code> [--no-sync]
+  sync   --project <key> [--root <dir>] [--url <api-url>]
   scan   --project <key> [--root <dir>] [--policy <policy.yaml>] [--out <bundle.json>]
   diff   --project <key> [--root <dir>] --from <snapshot-id> --to <snapshot-id|latest>
   run    --project <key> [--root <dir>] [--label <name>] [--expected <snapshot-id|bundle.json>] -- <command> [args]
@@ -132,12 +135,16 @@ async function diffCommand(args) {
 }
 
 async function uploadCommand(args) {
-  if ((!args.bundle && !args.queue) || (args.bundle && args.queue) || !args.url) {
-    throw new Error('upload requires exactly one of --bundle or --queue, plus --url');
+  if ((!args.bundle && !args.queue) || (args.bundle && args.queue)) {
+    throw new Error('upload requires exactly one of --bundle or --queue');
   }
+  const config = args.project || !args.url ? await projectFromArgs(args) : null;
+  const apiUrl = args.url || config?.remote?.api_url;
+  if (!apiUrl) throw new Error('upload requires --url or a paired project');
   const options = {
-    apiUrl: args.url,
+    apiUrl,
     sourceId: args.source,
+    projectId: args.project_id || config?.remote?.project_id,
     token: args.token || process.env.LABLINEAGE_SERVICE_TOKEN,
     retries: args.retries === undefined ? undefined : Number(args.retries)
   };
@@ -164,6 +171,56 @@ async function uploadCommand(args) {
     stateFile: args.state ? path.resolve(args.state) : undefined
   });
   console.log(`Upload queue complete: ${result.uploaded} uploaded, ${result.skipped} already complete.`);
+}
+
+async function syncProject(args, config) {
+  const apiUrl = args.url || config.remote?.api_url;
+  const projectId = args.project_id || config.remote?.project_id;
+  if (!apiUrl || !projectId) throw new Error('sync requires a paired project or --url and --project-id');
+  const { manifest, payload } = await captureProjectSnapshot(args, config);
+  const saved = await storeSnapshot(config, payload);
+  const uploaded = await uploadBundle({
+    filename: saved.filename,
+    apiUrl,
+    projectId,
+    retries: args.retries === undefined ? undefined : Number(args.retries),
+  });
+  console.log(`Synced ${manifest.bundle_id}; analysis run=${uploaded.result.runId}; status=${uploaded.result.statusUrl}`);
+  return uploaded;
+}
+
+async function pairCommand(args) {
+  if (!args.url || !args.pairing || !args.code) {
+    throw new Error('pair requires --url, --pairing and --code');
+  }
+  const config = await projectFromArgs(args);
+  const publicKeyPem = await readFile(config.public_key, 'utf8');
+  const endpoint = new URL(`/v1/collector/pairings/${encodeURIComponent(args.pairing)}/claim`, args.url).toString();
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'idempotency-key': args.pairing },
+    body: JSON.stringify({
+      code: args.code,
+      publicKeyPem,
+      deviceName: args.device_name || process.env.COMPUTERNAME || process.env.HOSTNAME || 'Local Collector',
+    }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Pairing failed (${response.status})`);
+  const updated = await saveProjectConnection(config, {
+    apiUrl: args.url,
+    projectId: result.collector.projectId,
+    collectorId: result.collector.collectorId,
+    sourceId: result.source.id,
+    submitUrl: result.submitUrl,
+  }, { configFile: args.config });
+  console.log(`Paired ${updated.project_key} with collector ${result.collector.collectorId}`);
+  if (!args.no_sync) await syncProject(args, updated);
+}
+
+async function syncCommand(args) {
+  const config = await projectFromArgs(args);
+  await syncProject(args, config);
 }
 
 async function runCommand(args) {
@@ -268,6 +325,8 @@ async function main() {
   }
   if (args.command === 'verify') return verifyCommand(args);
   if (args.command === 'diff') return diffCommand(args);
+  if (args.command === 'pair') return pairCommand(args);
+  if (args.command === 'sync') return syncCommand(args);
   if (args.command === 'upload') return uploadCommand(args);
   if (args.command === 'run') return runCommand(args);
   if (args.command === 'scan' || args.command === 'snapshot') return scanCommand(args);

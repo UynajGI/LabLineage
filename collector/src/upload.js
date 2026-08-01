@@ -37,6 +37,7 @@ export async function uploadBundle({
   filename,
   apiUrl,
   sourceId,
+  projectId,
   token,
   retries = 4,
   fetchImpl = fetch,
@@ -45,7 +46,9 @@ export async function uploadBundle({
   const payload = JSON.parse(await readFile(filename, 'utf8'));
   const id = bundleId(payload);
   const endpoint = new URL(
-    sourceId ? `/v1/sources/${encodeURIComponent(sourceId)}/bundles` : '/v1/manifests',
+    projectId
+      ? `/v1/projects/${encodeURIComponent(projectId)}/collector-runs`
+      : sourceId ? `/v1/sources/${encodeURIComponent(sourceId)}/bundles` : '/v1/manifests',
     apiUrl
   ).toString();
   let lastError;
@@ -87,6 +90,7 @@ export async function uploadQueue({
   stateFile = path.join(queueDirectory, '.lablineage-upload-state.json'),
   apiUrl,
   sourceId,
+  projectId,
   token,
   retries,
   fetchImpl,
@@ -107,7 +111,7 @@ export async function uploadQueue({
       results.push({ bundleId: id, filename, skipped: true });
       continue;
     }
-    const uploaded = await uploadBundle({ filename, apiUrl, sourceId, token, retries, fetchImpl, wait });
+    const uploaded = await uploadBundle({ filename, apiUrl, sourceId, projectId, token, retries, fetchImpl, wait });
     state.completed[id] = {
       filename: entry.name,
       uploadedAt: new Date().toISOString(),
