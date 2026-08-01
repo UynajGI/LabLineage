@@ -1434,6 +1434,37 @@ export function buildApp() {
     res.json({ events });
   });
 
+  app.post('/v1/handoffs/:handoffId/tasks/:taskId/status', requireHandoffOrder, requireIdempotentWrite, async (req, res) => {
+    const input = z.object({
+      expectedVersion: z.number().int().positive(),
+      status: z.enum(['pending', 'done', 'blocked'])
+    }).parse(req.body);
+    const order = req.handoffOrder;
+    if (['completed', 'cancelled'].includes(order.status)) {
+      return res.status(409).json({ error: `Handoff tasks cannot be updated in status ${order.status}` });
+    }
+    try {
+      assertVersion(order, input.expectedVersion);
+    } catch (error) {
+      if (error instanceof HandoffVersionConflictError) return res.status(409).json({ error: error.message });
+      throw error;
+    }
+    let updated;
+    await store.update((state) => {
+      const current = (state.handoffOrders || []).find((item) => item.id === req.params.handoffId);
+      if (!current) throw new Error('Handoff order was removed');
+      assertVersion(current, input.expectedVersion);
+      const task = (state.handoffTasks || []).find((item) => item.id === req.params.taskId && item.orderId === current.id);
+      if (!task) throw new Error('Handoff task not found for this order');
+      task.status = input.status;
+      current.version += 1;
+      current.updatedAt = new Date().toISOString();
+      appendHandoffEvent(state, current, 'task_status', req.actor.subject, { taskId: task.id, status: input.status });
+      updated = current;
+    });
+    res.json(orderView(store.get(), updated));
+  });
+
   const previewForOrder = (state, order) => {
     const summary = projectSummary(state, order.projectId);
     const payload = buildHandoffPayload({

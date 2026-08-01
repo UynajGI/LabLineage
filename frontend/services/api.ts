@@ -206,6 +206,10 @@ export const api = {
     return body.events;
   },
 
+  async setHandoffTaskStatus(orderId: string, taskId: string, expectedVersion: number, status: 'pending' | 'done' | 'blocked'): Promise<HandoffOrder> {
+    return request(`/v1/handoffs/${orderId}/tasks/${taskId}/status`, { method: 'POST', body: JSON.stringify({ expectedVersion, status }) });
+  },
+
   async previewHandoffExport(orderId: string): Promise<{ preview: { orderId: string; orderNumber: string; drive: { name: string; bytes: number }; sheets: { auditId: string; row: string }; gmail: { to: string; subject: string; mode: string } }; sha256: string }> {
     const order = await this.getHandoffOrder(orderId);
     return request(`/v1/handoffs/${orderId}/exports/preview`, { method: 'POST', body: JSON.stringify({ expectedVersion: order.version }) });

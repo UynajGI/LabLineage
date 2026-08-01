@@ -39,6 +39,7 @@ const routeDefinitions = [
   ['post', '/v1/handoffs/{handoffId}/complete', 'Deterministically complete a handoff order'],
   ['post', '/v1/handoffs/{handoffId}/cancel', 'Cancel a handoff order'],
   ['get', '/v1/handoffs/{handoffId}/events', 'Read the append-only handoff event timeline'],
+  ['post', '/v1/handoffs/{handoffId}/tasks/{taskId}/status', 'Update a handoff task status'],
   ['post', '/v1/handoffs/{handoffId}/exports/preview', 'Generate a preview bound to the handoff order'],
   ['post', '/v1/handoffs/{handoffId}/exports/execute', 'Execute the bound Workspace export'],
   ['get', '/v1/projects/{projectId}/audit-events', 'Read immutable audit events'],
@@ -219,6 +220,15 @@ const requestSchemaByRoute = {
   'post /v1/handoffs/{handoffId}/exports/preview': {
     type: 'object', additionalProperties: false, required: ['expectedVersion'],
     properties: { expectedVersion: { type: 'integer', minimum: 1 } }
+  },
+  'post /v1/handoffs/{handoffId}/tasks/{taskId}/status': {
+    type: 'object',
+    additionalProperties: false,
+    required: ['expectedVersion', 'status'],
+    properties: {
+      expectedVersion: { type: 'integer', minimum: 1 },
+      status: { type: 'string', enum: ['pending', 'done', 'blocked'] }
+    }
   },
   'post /v1/handoffs/{handoffId}/exports/execute': {
     type: 'object',

@@ -334,9 +334,21 @@ export const HandoffView: React.FC = () => {
                   <h4 className="text-sm font-semibold text-slate-700 mb-2">{t('Tasks & Evidence')}</h4>
                   <ul className="space-y-1">
                     {selected.tasks.map((task) => (
-                      <li key={task.id} className="flex justify-between text-sm bg-slate-50 border border-slate-200 rounded px-3 py-2">
+                      <li key={task.id} className="flex justify-between items-center text-sm bg-slate-50 border border-slate-200 rounded px-3 py-2">
                         <span>{task.title}</span>
-                        <span className="text-xs text-slate-500">{task.status}</span>
+                        <span className="flex items-center gap-2">
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${task.status === 'done' ? 'bg-green-100 text-green-800' : task.status === 'blocked' ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-600'}`}>{task.status}</span>
+                          {!['completed', 'cancelled'].includes(selected.status) && (
+                            <button
+                              type="button"
+                              onClick={() => void runAction(() => api.setHandoffTaskStatus(selected.id, task.id, selected.version, task.status === 'done' ? 'pending' : 'done'), '')}
+                              disabled={busy}
+                              className="text-xs text-blue-700 hover:text-blue-900"
+                            >
+                              {task.status === 'done' ? t('Mark pending') : t('Mark done')}
+                            </button>
+                          )}
+                        </span>
                       </li>
                     ))}
                   </ul>

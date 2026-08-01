@@ -195,6 +195,7 @@ test('handoff order lifecycle over HTTP with versioning, reviews and events', as
       // a pending task deterministically blocks completion
       const gated = await create({ ...ORDER_BODY, tasks: [{ title: '迁移 Git 仓库', description: 'push 所有分支' }] });
       const gatedId = gated.json.id;
+      const gatedTaskId = gated.json.tasks[0].id;
       await fetch(`${baseUrl}/v1/handoffs/${gatedId}/submit`, {
         method: 'POST', headers: { ...headers, 'Idempotency-Key': uuid() }, body: JSON.stringify({ expectedVersion: 1 })
       });
@@ -208,6 +209,15 @@ test('handoff order lifecycle over HTTP with versioning, reviews and events', as
         method: 'POST', headers: { ...headers, 'Idempotency-Key': uuid() }, body: JSON.stringify({ expectedVersion: 4 })
       });
       assert.equal(gatedComplete.status, 409);
+      const taskDone = await fetch(`${baseUrl}/v1/handoffs/${gatedId}/tasks/${gatedTaskId}/status`, {
+        method: 'POST', headers: { ...headers, 'Idempotency-Key': uuid() }, body: JSON.stringify({ expectedVersion: 4, status: 'done' })
+      });
+      assert.equal(taskDone.status, 200);
+      const gatedCompleteAfter = await fetch(`${baseUrl}/v1/handoffs/${gatedId}/complete`, {
+        method: 'POST', headers: { ...headers, 'Idempotency-Key': uuid() }, body: JSON.stringify({ expectedVersion: 5 })
+      });
+      assert.equal(gatedCompleteAfter.status, 200);
+      assert.equal((await gatedCompleteAfter.json()).status, 'completed');
 
       // worksp ace export is rejected when there is no preview binding
       const executeBeforePreview = await fetch(`${baseUrl}/v1/handoffs/${orderId}/exports/execute`, {

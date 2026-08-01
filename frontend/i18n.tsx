@@ -330,6 +330,8 @@ const translations: Record<string, { en: string; zh: string }> = {
   'receiver_accepted': { en: 'receiver_accepted', zh: '接收人已确认' },
   'completed': { en: 'completed', zh: '已完成' },
   'cancelled': { en: 'cancelled', zh: '已取消' },
+  'Mark done': { en: 'Mark done', zh: '标记完成' },
+  'Mark pending': { en: 'Mark pending', zh: '标记未完成' },
 };
 
 function interpolate(template: string, values: Record<string, string | number>): string {
