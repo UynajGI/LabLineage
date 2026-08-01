@@ -80,6 +80,29 @@
 - Terraform 运行身份只有 object creator/viewer，没有 delete 权限；桶至少保留
   30 天，默认在 365 天按生命周期删除。环境的数据保留审批可以延长该周期。
 
+## 交接单（HandoffOrder）契约
+
+交接事件（离任/接收/审核人、截止时间）属于可重复、可审批、可追踪的**交接单**，
+不再属于全局系统设置。`/v1/setup` 只保存机构资料、项目默认值与数据策略；
+`defaultRegion` 必须是 Cloud Run 区域白名单内的值（或空），不再接受自由输入。
+
+- `GET /v1/projects/{projectId}/handoffs` — 列表，支持 `status`、`filter=needs_review|needs_accept|overdue`、`completed`
+- `POST /v1/projects/{projectId}/handoffs` — 创建草稿单（人员 subject + 邮箱快照、截止时间、时区、任务）；返回 `HO-YYYYMM-NNN` 单号
+- `GET/PATCH /v1/handoffs/{handoffId}` — 读取/更新（仅 draft/changes_requested，PATCH 必须携带 `expectedVersion`）
+- `POST /v1/handoffs/{handoffId}/submit|reviews|accept|complete|cancel` — 状态迁移
+- `POST /v1/handoffs/{handoffId}/tasks/{taskId}/status` — 任务 `pending|done|blocked`
+- `GET /v1/handoffs/{handoffId}/events` — 追加式事件时间线
+- `POST /v1/handoffs/{handoffId}/exports/preview|execute` — 预览/导出，执行绑定 `previewSha256`
+
+状态机：`draft → submitted → in_review → approved → receiver_accepted → completed`，
+含 `changes_requested`（退回 submitted）与 `cancelled`。约束：
+
+- `overdue` 由 `dueAt` 动态计算，不是可写状态。
+- 审核必须由指定审核人的认证 subject 完成；接收确认必须由接收成员 subject 完成；邮箱仅作快照，不是权限依据。
+- 完成由确定性服务判定：已批准 + 全部必需任务 done。
+- Workspace 导出仅限 `receiver_accepted`/`completed`，且必须提供与当前预览一致的 `previewSha256`。
+- 所有写操作要求 `Idempotency-Key`；状态变更与更新携带 `expectedVersion`（冲突返回 409）。
+
 ## 仓库同步契约
 
 `POST /v1/projects/{projectId}/repositories/sync` 使用 `provider` 判别联合：
