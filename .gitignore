@@ -11,6 +11,11 @@ coverage/
 *.tfstate
 *.tfstate.*
 terraform.tfvars
+
+# GCP service account keys (never committed)
+github-deploy-key.json
+*-sa-key.json
+*service-account*.json
 playwright-report/
 test-results/
 .codemap/
