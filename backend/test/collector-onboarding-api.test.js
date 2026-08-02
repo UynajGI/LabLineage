@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { app, store } from '../server.js';
 import { makeDemoState } from '../lib/store.js';
-import { signManifest } from '../../collector/src/collector.js';
+import { collectSnapshot, signManifest } from '../../collector/src/collector.js';
 
 async function withServer(run) {
   const server = app.listen(0, '127.0.0.1');
@@ -64,7 +64,7 @@ async function waitForTerminal(base, projectId, runId) {
   throw new Error('analysis run did not reach a terminal state');
 }
 
-test('editor pairs a local collector and its signed manifest starts automatic analysis', async () => {
+test('editor pairs a local collector and its signed scan of a legacy project starts automatic analysis', async (t) => {
   await withServer(async (base) => {
     await withIsolatedStore(async () => {
       const projectId = 'project_phase_transition';
@@ -99,17 +99,22 @@ test('editor pairs a local collector and its signed manifest starts automatic an
       assert.equal((await claimReplay.json()).collector.collectorId, claimed.collector.collectorId);
       assert.equal(store.get().collectorCredentials.length, 1);
 
-      const bundle = signManifest({
-        schema_version: 'lablineage.manifest.v1',
-        bundle_id: 'collector-api-bundle-1',
-        project_key: 'phase-transition',
-        captured_at: '2026-08-02T00:00:00Z',
-        directory_fingerprint: { value: 'c'.repeat(64) },
-        records: [{
-          record_type: 'asset', asset_id: 'figure', path_token: 'fig3.png',
-          asset_type: 'figure', content_hash: `sha256:${'d'.repeat(64)}`, size_bytes: 100,
-        }],
-      }, privateKey.export({ type: 'pkcs8', format: 'pem' }));
+      const legacyRoot = await mkdtemp(path.join(tmpdir(), 'lablineage-legacy-project-'));
+      t.after(() => rm(legacyRoot, { recursive: true, force: true }));
+      await mkdir(path.join(legacyRoot, 'analysis'), { recursive: true });
+      await mkdir(path.join(legacyRoot, 'results'), { recursive: true });
+      await writeFile(path.join(legacyRoot, 'README.md'), '# Phase transition archive\n\nHistorical simulation project.\n');
+      await writeFile(path.join(legacyRoot, 'analysis', 'simulate.py'), "print('phase transition')\n");
+      await writeFile(path.join(legacyRoot, 'results', 'figure.csv'), 'temperature,order\n1.0,0.8\n');
+      const manifest = await collectSnapshot({
+        root: legacyRoot,
+        projectKey: 'phase-transition',
+        pathSalt: 'collector-onboarding-test-path-salt',
+        indexPath: path.join(legacyRoot, '.lablineage', 'collector.sqlite'),
+      });
+      assert.ok(manifest.records.length >= 3);
+      assert.equal(JSON.stringify(manifest).includes(legacyRoot), false);
+      const bundle = signManifest(manifest, privateKey.export({ type: 'pkcs8', format: 'pem' }));
       const runResponse = await fetch(`${base}${claimed.submitUrl}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
