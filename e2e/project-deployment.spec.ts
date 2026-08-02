@@ -49,6 +49,8 @@ test('generates a project-scoped Local Collector pairing without requesting a ZI
   await expect(page.getByText('Raw file contents: disabled')).toBeVisible();
   await expect(page.getByText('Absolute local paths: disabled')).toBeVisible();
   const command = page.locator('pre code');
+  await expect(command).toContainText('npm run collector -- init');
+  await expect(command).toContainText('npm run collector -- pair');
   await expect(command).toContainText(`--project "${suffix}"`);
   await expect(command).toContainText('--root "<local directory>"');
   await expect(page.getByRole('heading', { name: 'One-time ZIP fallback' })).toHaveCount(0);
