@@ -8,6 +8,7 @@ instructions.
 
 | Document | Audience | Use it for |
 |---|---|---|
+| [Local competition demo](local-demo.md) | Presenters, judges, and developers | Analyze an existing project locally from pairing through the final objective report |
 | [User guide](user-guide.md) | Researchers and reviewers | Project goals, Local Collector/GitHub onboarding, automatic analysis, reports, and handoff |
 | [Administrator guide](administrator-guide.md) | Operators and platform owners | Configuration, identity, storage, hooks, CI/CD, and launch checks |
 | [Demo script](demo-script.md) | Presenters and judges | A short, repeatable product walkthrough |
@@ -28,7 +29,7 @@ instructions.
 | Document | Audience | Use it for |
 |---|---|---|
 | [Operations runbook](operations-runbook.md) | On-call and platform teams | Deployment, health, backup, recovery, alerts, and incident response |
-| [Demo deployment](demo-deployment.md) | Competition team and judges | Cloud Run judge-demo deployment, evidence capture, cost, and cleanup |
+| [Optional cloud deployment](demo-deployment.md) | Operators | Cloud Run deployment, evidence capture, cost, and cleanup; not required by the local competition demo |
 | [Release and supply chain](release-and-supply-chain.md) | Release engineers | SBOM, checksums, signing, promotion, rollback, and live-evaluation evidence |
 | [Threat model](threat-model.md) | Security reviewers | Threats, controls, validation methods, and external assurance boundaries |
 | [Dependency risk register](dependency-risk-register.md) | Maintainers and security reviewers | Accepted transitive risks, controls, and exit conditions |

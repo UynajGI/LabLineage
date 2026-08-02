@@ -25,6 +25,11 @@ facts, hashes, evidence, and R0–R4 reproducibility levels.**
 
 Requirements: Node.js 22.15 or newer.
 
+The competition demo defaults to the fully local profile. It needs no Google
+Cloud resources: the console, API, state, object store, worker, and Collector
+all run on the same computer. Google ADK is optional; deterministic scanning,
+lineage, audit, and objective assessment still complete without a model.
+
 ```powershell
 npm install --ignore-scripts
 Copy-Item .env.example backend/.env.local
@@ -45,6 +50,13 @@ Vertex AI application-default credentials or a Gemini key in the ignored
 `backend/.env.local`. Keep secrets out of commands, logs, commits, and
 documentation; `LABLINEAGE_PROXY` is optional for local development.
 
+To analyze an existing project, select **Local directory**, generate a pairing
+code, and run the two commands displayed by the page. The first initializes the
+local Collector metadata; the second scans the historical directory, submits a
+signed path-redacted evidence bundle, and automatically starts the complete
+analysis. See the [local competition demo](docs/local-demo.md) for the exact
+judge flow.
+
 ## System map
 
 ```text
@@ -62,12 +74,13 @@ Authenticated Express API ── PostgreSQL in production
               └── authenticated read-only MCP tools
 ```
 
-Two deployment profiles share the same API, run state machine, and report
-contract:
+The local profile is the maintained competition-demo path. An optional cloud
+profile shares the same API, run state machine, and report contract:
 
 - `local`: API, JSON/PostgreSQL state, immutable objects, and the inline worker
   run on the workstation and bind to loopback by default.
-- `google_cloud`: Cloud Run, Cloud SQL, GCS, Cloud Tasks with OIDC, and Vertex
+- `google_cloud` (optional, outside the demo acceptance scope): Cloud Run,
+  Cloud SQL, GCS, Cloud Tasks with OIDC, and Vertex
   AI/ADC run in Google Cloud. The Collector still runs on the user's computer.
 
 Local source code is not uploaded as a ZIP. The Local Collector reads an
