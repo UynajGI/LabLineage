@@ -35,7 +35,7 @@
     "@axe-core/playwright": "^4.12.1",
     "@playwright/test": "^1.62.0",
     "concurrently": "^9.2.0",
-    "wait-on": "^8.0.4"
+    "wait-on": "^9.1.0"
   },
   "overrides": {
     "@google/adk": {
