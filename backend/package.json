@@ -45,6 +45,6 @@
   },
   "devDependencies": {
     "@apidevtools/swagger-parser": "^12.1.0",
-    "@types/node": "^25.2.0"
+    "@types/node": "^26.1.2"
   }
 }
