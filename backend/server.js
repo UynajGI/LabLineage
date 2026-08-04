@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ZodError, z } from 'zod';
@@ -18,6 +18,7 @@ import {
 } from './lib/mcp-server.js';
 import { recordAgentUsage, renderPrometheusMetrics, requestObservability, structuredLog } from './lib/observability.js';
 import { createObjectStore } from './lib/object-store.js';
+import { productionConfigurationIssues } from './lib/readiness.js';
 import { deploymentProfile, publicDeploymentCapabilities } from './lib/deployment-mode.js';
 import { createAnalysisDispatcher } from './lib/analysis-dispatcher.js';
 import { executeAnalysisRun } from './lib/analysis-pipeline.js';
@@ -84,6 +85,40 @@ const port = Number(process.env.LABLINEAGE_PORT || process.env.PORT || 8788);
 const host = process.env.LABLINEAGE_HOST || (runtimeDeployment.mode === 'google_cloud' ? '0.0.0.0' : '127.0.0.1');
 export const store = await createStore();
 const requireIdempotentWrite = createIdempotencyMiddleware(store);
+
+const READINESS_CACHE_MS = 15_000;
+let readinessCache = null;
+let readinessPromise = null;
+
+export async function evaluateReadiness({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && readinessCache && now - readinessCache.checkedAt < READINESS_CACHE_MS) {
+    return readinessCache.value;
+  }
+  if (!force && readinessPromise) return readinessPromise;
+  const check = async () => {
+    const issues = productionConfigurationIssues();
+    if (issues.length) {
+      throw Object.assign(new Error(`Production configuration is incomplete: ${issues.join('; ')}`), {
+        code: 'configuration_not_ready',
+        issues,
+      });
+    }
+    if (typeof store.refresh === 'function') await store.refresh();
+    const objectStorage = await createObjectStore({ dataDir: store.dataDir }).checkReady();
+    const value = {
+      status: 'ready',
+      database: postgresConfigured() ? 'postgresql' : 'json-development',
+      objectStorage,
+    };
+    readinessCache = { checkedAt: Date.now(), value };
+    return value;
+  };
+  readinessPromise = check().finally(() => {
+    readinessPromise = null;
+  });
+  return readinessPromise;
+}
 const analysisObjectStore = {
   putImmutable: (input) => createObjectStore({ dataDir: store.dataDir }).putImmutable(input),
   get: (key) => createObjectStore({ dataDir: store.dataDir }).get(key),
@@ -194,16 +229,17 @@ async function ingestManifest(raw, actor, { sourceId = null } = {}) {
   const outcome = await store.update((state) => {
     state.importedBundles ||= [];
     state.evidence ||= [];
-    const existing = state.importedBundles.find((item) => item.bundleId === result.bundleId);
+    const existing = state.importedBundles.find((item) => item.bundleId === result.bundleId && item.projectId === project.id);
     if (existing) return { ...existing, idempotent: true };
     for (const node of imported.nodes) {
-      const index = state.nodes.findIndex((item) => item.id === node.id);
+      const index = state.nodes.findIndex((item) => item.id === node.id && item.projectId === project.id);
       if (index >= 0) state.nodes[index] = node;
       else state.nodes.push(node);
     }
     for (const edge of imported.edges) {
       edge.id ||= stableEdgeId(edge);
       const index = state.edges.findIndex((item) => (
+        item.projectId === project.id &&
         item.source === edge.source &&
         item.target === edge.target &&
         item.relation === edge.relation &&
@@ -213,7 +249,7 @@ async function ingestManifest(raw, actor, { sourceId = null } = {}) {
       else state.edges.push(edge);
     }
     for (const item of imported.evidence) {
-      const index = state.evidence.findIndex((candidate) => candidate.id === item.id);
+      const index = state.evidence.findIndex((candidate) => candidate.id === item.id && candidate.projectId === project.id);
       if (index >= 0) state.evidence[index] = item;
       else state.evidence.push(item);
     }
@@ -450,7 +486,112 @@ function scheduleIngestionJob(jobId, delayMs = 0) {
   ingestionExecutions.set(jobId, execution);
 }
 
-async function recoverIngestionJobs() {
+async function putTrackedObject({ key, content, contentType, metadata, purpose, projectId }) {
+  const reservationId = `object_${createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
+  const contentSha256 = createHash('sha256').update(content).digest('hex');
+  await store.update((state) => {
+    state.objectReservations ||= [];
+    const existing = state.objectReservations.find((item) => item.id === reservationId);
+    if (existing && existing.contentSha256 !== contentSha256) {
+      throw Object.assign(new Error('Object reservation key was reused with different content'), { statusCode: 409 });
+    }
+    if (existing) {
+      Object.assign(existing, { status: 'pending', updatedAt: new Date().toISOString() });
+      delete existing.failure;
+      return;
+    }
+    state.objectReservations.push({
+      id: reservationId,
+      key,
+      projectId,
+      purpose,
+      contentSha256,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  });
+  try {
+    const stored = await createObjectStore({ dataDir: store.dataDir }).putImmutable({
+      key,
+      content,
+      contentType,
+      metadata,
+    });
+    await store.update((state) => {
+      const reservation = state.objectReservations.find((item) => item.id === reservationId);
+      if (!reservation) throw new Error('Object reservation disappeared');
+      Object.assign(reservation, {
+        status: 'committed',
+        storageUri: stored.uri,
+        storageGeneration: stored.generation || null,
+        storageCrc32c: stored.crc32c || null,
+        sizeBytes: stored.sizeBytes,
+        updatedAt: new Date().toISOString(),
+      });
+    });
+    return stored;
+  } catch (error) {
+    await store.update((state) => {
+      const reservation = state.objectReservations.find((item) => item.id === reservationId);
+      if (reservation) {
+        reservation.status = 'failed';
+        reservation.failure = String(error.message || error).slice(0, 300);
+        reservation.updatedAt = new Date().toISOString();
+      }
+    }).catch(() => {});
+    throw error;
+  }
+}
+
+async function recoverObjectReservations() {
+  const pending = (store.get().objectReservations || []).filter((item) => item.status === 'pending');
+  for (const item of pending) {
+    try {
+      const stored = await createObjectStore({ dataDir: store.dataDir }).get(item.key);
+      await store.update((state) => {
+        const current = state.objectReservations.find((candidate) => candidate.id === item.id);
+        if (!current) return;
+        current.status = stored.sha256 === current.contentSha256 ? 'committed' : 'failed';
+        current.storageUri = stored.uri;
+        current.storageGeneration = stored.generation || null;
+        current.storageCrc32c = stored.crc32c || null;
+        current.sizeBytes = stored.content.length;
+        current.updatedAt = new Date().toISOString();
+        if (current.status === 'failed') current.failure = 'Recovered object checksum mismatch';
+      });
+    } catch (error) {
+      await store.update((state) => {
+        const current = state.objectReservations.find((candidate) => candidate.id === item.id);
+        if (!current) return;
+        current.status = 'failed';
+        current.failure = `Object was not recoverable after restart: ${String(error.message || error).slice(0, 220)}`;
+        current.updatedAt = new Date().toISOString();
+      });
+    }
+  }
+}
+
+let ingestionRecoveryTimer = null;
+
+export function startIngestionRecoveryLoop() {
+  if (ingestionRecoveryTimer) return;
+  const intervalMs = Math.max(1_000, Number(process.env.LABLINEAGE_INGESTION_POLL_MS || 5_000));
+  ingestionRecoveryTimer = setInterval(() => {
+    void recoverIngestionJobs().catch((error) => {
+      structuredLog('error', 'ingestion_recovery_failed', { error: error.message });
+    });
+  }, intervalMs);
+  ingestionRecoveryTimer.unref?.();
+}
+
+export function stopIngestionRecoveryLoop() {
+  if (!ingestionRecoveryTimer) return;
+  clearInterval(ingestionRecoveryTimer);
+  ingestionRecoveryTimer = null;
+}
+
+export async function recoverIngestionJobs() {
   const now = Date.now();
   await store.update((state) => {
     for (const job of state.ingestionJobs || []) {
@@ -724,11 +865,14 @@ export function buildApp({ githubClientFactory = createGitHubClientFromEnv } = {
 
   app.get('/api/ready', async (_req, res) => {
     try {
-      if (typeof store.refresh === 'function') await store.refresh();
-      res.json({ status: 'ready', deployment: publicDeploymentCapabilities() });
+      res.json(await evaluateReadiness());
     } catch (error) {
       structuredLog('error', 'readiness_failed', { error: error.message });
-      res.status(503).json({ status: 'not_ready' });
+      res.status(503).json({
+        status: 'not_ready',
+        code: error.code || 'dependency_not_ready',
+        ...(error.issues ? { issues: error.issues } : {}),
+      });
     }
   });
 
@@ -780,13 +924,19 @@ export function buildApp({ githubClientFactory = createGitHubClientFromEnv } = {
       defaultProjectName: z.string().max(200),
       defaultProjectSlug: z.string().regex(/^[a-z0-9-]*$/).max(100)
     }).strict().parse(req.body);
-    await store.update((state) => { state.setupConfig = { ...state.setupConfig, ...input }; });
-    await store.log({ action: 'update_setup_config', actor: req.actor.subject, resource: 'system/config', details: 'Configuration updated.' });
+    await store.updateWithAudit(
+      (state) => { state.setupConfig = input; },
+      { action: 'update_setup_config', actor: req.actor.subject, resource: 'system/config', details: 'Configuration updated.' }
+    );
     res.status(204).end();
   });
 
   app.get('/v1/integrations/status', (_req, res) => {
     const deployment = publicDeploymentCapabilities();
+    const objectMode = process.env.LABLINEAGE_OBJECT_STORE || (process.env.NODE_ENV === 'production' ? 'gcs' : 'local');
+    const objectStorageConfigured = objectMode === 'gcs'
+      ? Boolean(process.env.LABLINEAGE_GCS_BUCKET)
+      : process.env.NODE_ENV !== 'production' || process.env.LABLINEAGE_ALLOW_LOCAL_OBJECT_STORE === 'true';
     res.json({
       github: { configured: Boolean(process.env.GITHUB_TOKEN || (process.env.GITHUB_APP_ID && process.env.GITHUB_APP_INSTALLATION_ID && process.env.GITHUB_APP_PRIVATE_KEY)), mode: 'read-only' },
       workspace: {
@@ -2156,7 +2306,7 @@ export function buildApp({ githubClientFactory = createGitHubClientFromEnv } = {
   app.post('/v1/projects/:projectId/nodes/:nodeId/confirm', requireProject, authorizeRole('auditor'), requireIdempotentWrite, async (req, res) => {
     let found = false;
     await store.update((state) => {
-      const node = state.nodes.find((item) => item.id === req.params.nodeId);
+      const node = state.nodes.find((item) => item.id === req.params.nodeId && item.projectId === req.params.projectId);
       if (node) {
         found = true;
         node.humanConfirmed = true;
@@ -2402,29 +2552,51 @@ export function buildApp({ githubClientFactory = createGitHubClientFromEnv } = {
     const state = store.get();
     const root = state.nodes.find((node) => node.id === req.params.artifactId);
     if (!root) return res.status(404).json({ error: 'Artifact not found' });
-    const projectId = root.projectId || state.projects[0]?.id;
+    const projectId = root.projectId;
+    if (!projectId) return res.status(409).json({ error: 'Artifact has no project ownership' });
     if (!req.actor.projects.includes('*') && !req.actor.projects.includes(projectId)) {
       return res.status(403).json({ error: 'Project access denied' });
     }
+    const projectNodeIds = new Set(
+      state.nodes
+        .filter((node) => node.projectId === projectId || node.id === projectId)
+        .map((node) => node.id)
+    );
+    const projectEdges = state.edges.filter((edge) => (
+      projectNodeIds.has(edge.source) && projectNodeIds.has(edge.target)
+    ));
     const depth = Math.min(Number(req.query.depth || 4), 8);
     const ids = new Set([root.id]);
     for (let step = 0; step < depth; step += 1) {
-      for (const edge of state.edges) {
+      for (const edge of projectEdges) {
         if (ids.has(edge.source) || ids.has(edge.target)) {
           ids.add(edge.source);
           ids.add(edge.target);
         }
       }
     }
-    const nodes = state.nodes.filter((node) => ids.has(node.id));
-    const edges = state.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target));
-    const audit = createAudit(root.projectId || state.projects[0].id, nodes, edges);
+    const nodes = state.nodes.filter((node) => projectNodeIds.has(node.id) && ids.has(node.id));
+    const edges = projectEdges.filter((edge) => ids.has(edge.source) && ids.has(edge.target));
+    const audit = createAudit(projectId, nodes, edges);
     const evidenceIds = new Set([
       ...(root.evidenceIds || []),
       ...edges.flatMap((edge) => edge.evidenceIds || [])
     ]);
     const evidence = (state.evidence || []).filter((item) => item.projectId === projectId && evidenceIds.has(item.id));
-    res.json({ root, nodes, edges, evidence, reproducibility: { level: audit.level, score: audit.score, verifiedRerun: audit.verifiedRerun, missing: audit.missing } });
+    res.json({
+      root,
+      nodes,
+      edges,
+      evidence,
+      reproducibility: {
+        resultId: audit.resultId,
+        level: audit.level,
+        score: audit.score,
+        verifiedRerun: audit.verifiedRerun,
+        missing: audit.missing,
+        resultScores: audit.resultScores
+      }
+    });
   });
 
   app.get('/v1/projects/:projectId/agent/conversations', requireReadableProject, async (req, res) => {
@@ -2607,11 +2779,11 @@ export function buildApp({ githubClientFactory = createGitHubClientFromEnv } = {
   });
 
   app.post('/v1/projects/:projectId/handoffs/export', requireProject, requireIdempotentWrite, async (req, res) => {
+    z.object({ confirmation: z.literal('CREATE_LOCAL_HANDOFF_PREVIEW') }).parse(req.body);
     const graph = projectGraph(store.get(), req.params.projectId);
     const summary = projectSummary(store.get(), req.params.projectId);
     const findings = store.get().findings.filter((finding) => finding.projectId === req.params.projectId && finding.status === 'open');
-    const outputDir = path.join(store.dataDir, 'exports', req.params.projectId, new Date().toISOString().replace(/[:.]/g, '-'));
-    await mkdir(outputDir, { recursive: true });
+    const exportId = `export_${randomUUID()}`;
     const report = [
       `# ${summary.name} — Research Handoff`,
       '', `Generated: ${new Date().toISOString()}`, '',
@@ -2631,13 +2803,37 @@ export function buildApp({ githubClientFactory = createGitHubClientFromEnv } = {
       `A handoff report is ready for review. ${findings.length} open findings require attention.`,
       '', 'This is a local draft and has not been sent.'
     ].join('\r\n');
-    await Promise.all([
-      writeFile(path.join(outputDir, 'handoff-report.md'), report, 'utf8'),
-      writeFile(path.join(outputDir, 'findings.csv'), csv, 'utf8'),
-      writeFile(path.join(outputDir, 'gmail-draft.eml'), email, 'utf8')
-    ]);
-    await store.log({ action: 'export_handoff_preview', actor: req.actor.subject, resource: `project/${req.params.projectId}`, details: 'Created local report, CSV, and unsent email draft.' });
-    res.status(201).json({ status: 'preview_created', outputDir, files: ['handoff-report.md', 'findings.csv', 'gmail-draft.eml'], sent: false });
+    const files = [
+      ['handoff-report.md', report, 'text/markdown; charset=utf-8'],
+      ['findings.csv', csv, 'text/csv; charset=utf-8'],
+      ['gmail-draft.eml', email, 'message/rfc822'],
+    ];
+    const storedFiles = [];
+    for (const [name, content, contentType] of files) {
+      const stored = await putTrackedObject({
+        key: `exports/${req.params.projectId}/${exportId}/${name}`,
+        content,
+        contentType,
+        purpose: 'local_handoff_preview',
+        projectId: req.params.projectId,
+        metadata: { projectId: req.params.projectId, exportId, name },
+      });
+      storedFiles.push({ name, sha256: stored.sha256, sizeBytes: stored.sizeBytes });
+    }
+    const createdAt = new Date().toISOString();
+    await store.update((state) => {
+      state.handoffExports ||= [];
+      state.handoffExports.push({
+        id: exportId,
+        projectId: req.params.projectId,
+        files: storedFiles,
+        sent: false,
+        createdBy: req.actor.subject,
+        createdAt,
+      });
+    });
+    await store.log({ action: 'export_handoff_preview', actor: req.actor.subject, resource: `project/${req.params.projectId}/export/${exportId}`, details: 'Created immutable local report, CSV, and unsent email draft.' });
+    res.status(201).json({ status: 'preview_created', exportId, files: storedFiles, sent: false });
   });
 
   app.post('/v1/projects/:projectId/handoffs/workspace', requireProject, requireIdempotentWrite, async (req, res) => {
@@ -2802,9 +2998,12 @@ if (path.resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
   deploymentProfile(process.env, { requireExplicit: process.env.NODE_ENV === 'production' });
   const server = app.listen(port, host, () => {
     console.log(`LabLineage Guardian API listening on http://${host}:${port}`);
-    void recoverIngestionJobs().catch((error) => {
-      structuredLog('error', 'ingestion_recovery_failed', { error: error.message });
-    });
+    void Promise.all([recoverObjectReservations(), recoverIngestionJobs()])
+      .then(() => startIngestionRecoveryLoop())
+      .catch((error) => {
+        structuredLog('error', 'startup_recovery_failed', { error: error.message });
+        startIngestionRecoveryLoop();
+      });
     void analysisDispatcher.recover().catch((error) => {
       structuredLog('error', 'analysis_recovery_failed', { error: error.message });
     });

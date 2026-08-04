@@ -357,8 +357,15 @@ export const api = {
     });
   },
 
-  async executeHandoffActions(): Promise<{ outputDir: string; files: string[]; sent: boolean }> {
-    return request(`/v1/projects/${await projectId()}/handoffs/export`, { method: 'POST', body: '{}' });
+  async executeHandoffActions(): Promise<{
+    exportId: string;
+    files: Array<{ name: string; sha256: string; sizeBytes: number }>;
+    sent: boolean;
+  }> {
+    return request(`/v1/projects/${await projectId()}/handoffs/export`, {
+      method: 'POST',
+      body: JSON.stringify({ confirmation: 'CREATE_LOCAL_HANDOFF_PREVIEW' })
+    });
   },
 
   async previewWorkspaceHandoff(idempotencyKey: string): Promise<{

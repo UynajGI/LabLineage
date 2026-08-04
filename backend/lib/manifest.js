@@ -1,5 +1,6 @@
 import { createHash, createPublicKey, randomUUID, verify } from 'node:crypto';
 import { z } from 'zod';
+import { scopeGraphToProject } from './project-identity.js';
 
 const recordSchema = z.object({
   record_type: z.enum(['asset', 'run', 'lineage_edge', 'code_version', 'parameter_set', 'environment']),
@@ -106,6 +107,13 @@ const typeMap = {
   run: 'Run'
 };
 
+const assetTypeMap = {
+  code: 'CodeVersion',
+  config: 'ParameterSet',
+  dataset: 'Dataset',
+  figure: 'Figure'
+};
+
 export function importManifest(raw, projectId, options = {}) {
   const { manifest, signerFingerprint } = unwrapManifest(raw, options);
   const nodes = [];
@@ -140,7 +148,9 @@ export function importManifest(raw, projectId, options = {}) {
       continue;
     }
     const id = record.asset_id || record.run_id || `${record.record_type}_${randomUUID()}`;
-    const inferredType = record.asset_type === 'figure' ? 'Figure' : typeMap[record.record_type];
+    const inferredType = record.record_type === 'asset'
+      ? (assetTypeMap[record.asset_type] || 'Dataset')
+      : typeMap[record.record_type];
     nodes.push({
       id,
       projectId,
@@ -158,10 +168,20 @@ export function importManifest(raw, projectId, options = {}) {
         ...(record.command_redacted ? { command: record.command_redacted } : {}),
         ...(record.execution_mode ? { executionMode: record.execution_mode } : {}),
         ...(record.verification_status ? { verificationStatus: record.verification_status } : {}),
-        ...(record.rerun_hash_match !== undefined ? { rerunHashMatch: String(record.rerun_hash_match) } : {})
+        ...(record.rerun_hash_match !== undefined ? { rerunHashMatch: String(record.rerun_hash_match) } : {}),
+        ...(record.git_commit ? { gitCommit: record.git_commit } : {}),
+        ...(record.git_branch ? { gitBranch: record.git_branch } : {}),
+        ...(record.git_dirty !== undefined ? { gitDirty: String(record.git_dirty) } : {}),
+        ...(record.platform ? { platform: record.platform } : {}),
+        ...(record.architecture ? { architecture: record.architecture } : {}),
+        ...(record.node_version ? { nodeVersion: record.node_version } : {})
       },
       evidenceIds
     });
   }
-  return { manifest, nodes, edges, evidence: [...evidence.values()], signerFingerprint };
+  return {
+    manifest,
+    ...scopeGraphToProject(projectId, { nodes, edges, evidence: [...evidence.values()] }),
+    signerFingerprint
+  };
 }

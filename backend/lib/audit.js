@@ -1,10 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto';
 
+function hasTypedRelation(nodes, edges, type, relations) {
+  const ids = new Set(nodes.filter((node) => node.type === type).map((node) => node.id));
+  return edges.some((edge) => (
+    ids.has(edge.source) &&
+    relations.includes(edge.relation) &&
+    ['exact', 'strong', 'human_verified'].includes(edge.confidence) &&
+    (edge.evidenceIds || []).length > 0
+  ));
+}
+
 const checks = [
-  ['code_version', 20, (types) => types.has('CodeVersion')],
-  ['input_dataset', 15, (types) => types.has('Dataset')],
-  ['parameter_set', 15, (types) => types.has('ParameterSet')],
-  ['environment_lock', 15, (types) => types.has('Environment')],
+  ['code_version', 20, (_types, edges, nodes) => hasTypedRelation(nodes, edges, 'CodeVersion', ['executed_code', 'executed_as'])],
+  ['input_dataset', 15, (_types, edges, nodes) => hasTypedRelation(nodes, edges, 'Dataset', ['used_input', 'reads_from'])],
+  ['parameter_set', 15, (_types, edges, nodes) => hasTypedRelation(nodes, edges, 'ParameterSet', ['used_parameter_set', 'defines_parameters'])],
+  ['environment_capture', 15, (_types, edges, nodes) => hasTypedRelation(nodes, edges, 'Environment', ['captured_environment', 'used_environment'])],
   ['captured_run', 15, (types) => types.has('Run')],
   ['generated_output', 10, (types) => types.has('Figure')],
   ['lineage_evidence', 10, (_types, edges) => edges.some((edge) => ['exact', 'strong'].includes(edge.confidence))]
@@ -36,38 +46,80 @@ function timestamp(node) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export function scoreReproducibility(nodes, edges) {
-  const types = new Set(nodes.map((node) => node.type));
+function scoreResultSpine(nodes, edges, result, run) {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const spineEdges = run
+    ? edges.filter((edge) => (
+        (edge.target === run.id && nodeById.has(edge.source)) ||
+        (edge.source === run.id && edge.target === result.id)
+      ))
+    : [];
+  const spineNodes = run
+    ? [result, run, ...spineEdges.filter((edge) => edge.target === run.id).map((edge) => nodeById.get(edge.source))]
+    : [result];
+  const types = new Set(spineNodes.filter(Boolean).map((node) => node.type));
   const breakdown = checks.map(([key, weight, predicate]) => ({
     key,
     weight,
-    passed: predicate(types, edges)
+    passed: predicate(types, spineEdges, spineNodes)
   }));
   const score = breakdown.reduce((total, check) => total + (check.passed ? check.weight : 0), 0);
-  const verifiedRerun = nodes.some((node) => (
-    node.type === 'Run' &&
-    node.details?.executionMode === 'controlled-rerun' &&
-    node.details?.verificationStatus === 'verified' &&
-    String(node.details?.exitCode) === '0' &&
-    (node.evidenceIds || []).length > 0 &&
-    edges.some((edge) => {
-      if (edge.source !== node.id || edge.confidence !== 'exact' || !['generated', 'writes_to'].includes(edge.relation)) return false;
-      const output = nodes.find((candidate) => candidate.id === edge.target);
-      return output?.details?.rerunHashMatch === 'true' && (edge.evidenceIds || []).length > 0;
-    })
+  const outputEdge = run && spineEdges.find((edge) => (
+    edge.source === run.id &&
+    edge.target === result.id &&
+    edge.confidence === 'exact' &&
+    ['generated', 'writes_to'].includes(edge.relation)
   ));
+  const verifiedRerun = Boolean(
+    run &&
+    run.details?.executionMode === 'controlled-rerun' &&
+    run.details?.verificationStatus === 'verified' &&
+    String(run.details?.exitCode) === '0' &&
+    (run.evidenceIds || []).length > 0 &&
+    result.details?.rerunHashMatch === 'true' &&
+    (outputEdge?.evidenceIds || []).length > 0
+  );
   const level = score >= 85
     ? verifiedRerun ? 'R4' : 'R3'
     : score >= 65 ? 'R3' : score >= 40 ? 'R2' : score >= 20 ? 'R1' : 'R0';
   const missing = breakdown.filter((check) => !check.passed).map((check) => check.key);
   if (!verifiedRerun) missing.push('verified_rerun');
   return {
+    resultId: result.id,
     score,
     level,
     verifiedRerun,
     breakdown,
     missing
   };
+}
+
+export function scoreReproducibility(nodes, edges) {
+  const results = nodes.filter((node) => node.type === 'Figure').sort((left, right) => left.id.localeCompare(right.id));
+  if (!results.length) {
+    return {
+      resultId: null,
+      score: 0,
+      level: 'R0',
+      verifiedRerun: false,
+      breakdown: checks.map(([key, weight]) => ({ key, weight, passed: false })),
+      missing: [...checks.map(([key]) => key), 'verified_rerun'],
+      resultScores: []
+    };
+  }
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const resultScores = results.map((result) => {
+    const runs = edges
+      .filter((edge) => edge.target === result.id && ['generated', 'writes_to'].includes(edge.relation))
+      .map((edge) => nodeById.get(edge.source))
+      .filter((node) => node?.type === 'Run');
+    const scores = runs.length
+      ? runs.map((run) => scoreResultSpine(nodes, edges, result, run))
+      : [scoreResultSpine(nodes, edges, result, null)];
+    return scores.sort((left, right) => right.score - left.score)[0];
+  });
+  const summary = [...resultScores].sort((left, right) => left.score - right.score || left.resultId.localeCompare(right.resultId))[0];
+  return { ...summary, resultScores };
 }
 
 export function deriveFindings(nodes, edges) {

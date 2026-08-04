@@ -29,6 +29,11 @@ test('local object store provides immutable content-addressed behavior', async (
       contentType: 'text/markdown',
     });
     assert.equal(replay.idempotent, true);
+    assert.deepEqual(await objectStore.checkReady(), {
+      mode: 'local',
+      writable: true,
+      readable: true,
+    });
     assert.equal((await objectStore.get('reports/project/report.md')).content.toString('utf8'), '# report\n');
 
     await assert.rejects(

@@ -14,12 +14,19 @@ const declaredFunctions = new Set(
   [...sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-z_][a-z0-9_]*)\s*\(/gi)]
     .map((match) => match[1].toLowerCase())
 );
+const tenantFunctionReferences = new Set(
+  [...sql.matchAll(/\b([a-z_][a-z0-9_]*tenant[a-z0-9_]*)\s*\(\s*\)/gi)]
+    .map((match) => match[1].toLowerCase())
+);
 const tenantTables = new Set();
 for (const match of sql.matchAll(/CREATE TABLE\s+([a-z_][a-z0-9_]*)\s*\(([\s\S]*?)\);/gi)) {
   if (/\btenant_id\b/i.test(match[2])) tenantTables.add(match[1].toLowerCase());
 }
 tenantTables.add('project_memberships');
 const missing = [];
+for (const functionName of tenantFunctionReferences) {
+  if (!declaredFunctions.has(functionName)) missing.push(`undefined tenant policy function: ${functionName}()`);
+}
 for (const policy of sql.matchAll(/CREATE POLICY[\s\S]*?;/gi)) {
   for (const call of policy[0].matchAll(/\b([a-z_][a-z0-9_]*tenant[a-z0-9_]*)\s*\(\s*\)/gi)) {
     const functionName = call[1].toLowerCase();

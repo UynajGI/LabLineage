@@ -457,7 +457,23 @@ export async function syncNormalizedProjection(client, tenantId, state) {
       `INSERT INTO audits(id,tenant_id,project_id,status,reproducibility_level,policy_version,summary,started_at,finished_at)
        VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9)
        ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status,reproducibility_level=EXCLUDED.reproducibility_level,summary=EXCLUDED.summary,finished_at=EXCLUDED.finished_at`,
-      [id, tenantId, projectId, 'completed', audit.level, audit.policyVersion, JSON.stringify({ score: audit.score, missing: audit.missing, verifiedRerun: audit.verifiedRerun }), audit.createdAt, audit.createdAt]
+      [
+        id,
+        tenantId,
+        projectId,
+        'completed',
+        audit.level,
+        audit.policyVersion,
+        JSON.stringify({
+          resultId: audit.resultId,
+          resultScores: audit.resultScores,
+          score: audit.score,
+          missing: audit.missing,
+          verifiedRerun: audit.verifiedRerun
+        }),
+        audit.createdAt,
+        audit.createdAt
+      ]
     );
   }
 

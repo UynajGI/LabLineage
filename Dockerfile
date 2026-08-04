@@ -1,4 +1,4 @@
-ARG NODE_IMAGE=node:22.22.0-bookworm-slim
+ARG NODE_IMAGE=node:22.22-bookworm-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752
 FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -9,7 +9,7 @@ RUN npm ci --ignore-scripts
 COPY backend backend
 COPY frontend frontend
 COPY collector collector
-RUN npm run build && npm prune --omit=dev
+RUN npm run build && npm prune --omit=dev --omit=optional
 
 FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production

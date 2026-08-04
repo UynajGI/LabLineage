@@ -107,6 +107,20 @@ export const HandoffView: React.FC = () => {
     }
   };
 
+  const createLocalPreview = async () => {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await api.executeHandoffActions();
+      setMessage(`Immutable local preview ${result.exportId} created with ${result.files.length} files.`);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : t('Local preview failed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const createOrder = async () => {
     setBusy(true);
     setError('');
@@ -176,6 +190,9 @@ export const HandoffView: React.FC = () => {
         <div className="flex items-center gap-2">
           <button type="button" onClick={() => void refresh()} disabled={busy} className="rounded-md border border-slate-300 p-2 text-slate-600 hover:bg-slate-50" aria-label="刷新">
             <RefreshCw size={16} className={busy ? 'animate-spin' : ''} />
+          </button>
+          <button type="button" onClick={() => void createLocalPreview()} disabled={busy} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+            <FileText size={16} /> {t('Create local preview')}
           </button>
           <button type="button" onClick={() => setShowCreate((value) => !value)} className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
             <Plus size={16} /> {t('New Handoff Order')}
@@ -290,6 +307,8 @@ export const HandoffView: React.FC = () => {
             </ul>
           )}
         </div>
+      {error && <div role="alert" className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">{error}</div>}
+      {message && <div role="status" className="flex gap-2 bg-green-50 border border-green-200 rounded-lg p-4 text-green-800"><CheckCircle2 size={20} />{message}</div>}
 
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
           {!selected ? (

@@ -1,22 +1,55 @@
-# LabLineage Guardian
+# LabLineage Guardian web console
 
-LabLineage Guardian is a scientific research lineage, reproducibility, and handoff audit system designed for the Gemini Enterprise Agent Platform.
+This workspace contains the React 19 and Vite 8 console for LabLineage
+Guardian. It visualizes live API data; it does not contain a mock fallback or
+authoritative lineage logic.
 
-## Core Principles
-1. **Data stays on-premise:** Raw scientific data remains on the lab servers. Only metadata, hashes, and redacted excerpts are sent to the cloud.
-2. **Evidence over inference:** The system distinguishes between exact deterministic matches (hashes, Git diffs) and LLM-inferred relationships.
-3. **No automatic destructive actions:** The system will not delete files, send emails, or modify permissions without explicit human confirmation.
+## Start the full development workspace
 
-## Architecture
-- **Edge Collector:** A Python CLI that runs on lab servers to scan directories, compute hashes, and generate a signed `handoff-bundle.tar.zst`.
-- **Cloud Control Plane:** Google Cloud Run services that ingest the bundle, verify signatures, and store metadata in Cloud SQL.
-- **Guardian Agent:** A Gemini 2.5 Flash powered agent that analyzes the lineage graph, identifies conflicts, and suggests remediation steps.
-- **Workspace Adapter:** Integrates with Google Drive (for reports), Sheets (for handoff ledgers), and Gmail (for drafting notification emails).
+From the repository root:
 
-## Getting Started
-1. Review the `README_DEPLOY.md` for infrastructure setup instructions.
-2. Run the Setup Wizard in the Web UI to configure your organization, GCP project, GitHub App, and Workspace integrations.
-3. Deploy the Edge Collector to your lab server and upload the generated bundle via the Upload Center.
+```bash
+npm install --ignore-scripts
+cp .env.example backend/.env.local
+npm run seed
+npm run dev
+```
 
-## Security
-All secrets must be stored in Google Secret Manager. The application uses Application Default Credentials and Service Accounts with least-privilege IAM roles. See `SECURITY.md` (to be created) for more details.
+Open <http://localhost:5173/#/checklist>. The API health endpoint is
+<http://127.0.0.1:8788/api/health>.
+
+To run only the web workspace, start the API first and then run:
+
+```bash
+npm run dev --workspace frontend
+```
+
+## Main user flows
+
+- **Lineage Explorer**: inspect nodes, connected relationships, confidence and
+  evidence IDs.
+- **Directory Diff**: compare authorized non-Git snapshots.
+- **Audit Findings**: run deterministic audits and record reviewed resolutions.
+- **Workspace Handoff**: preview reports and create immutable local exports
+  without sending email.
+- **Guardian Agent**: optionally explain evidence through read-only tools when
+  a model is configured.
+
+Writes remain subject to the API's role, confirmation, idempotency and audit
+controls. R4 can only come from a successful controlled rerun with matching
+output hashes.
+
+## Verification
+
+From the repository root:
+
+```bash
+npm run typecheck --workspace frontend
+npm run build --workspace frontend
+npm run test:e2e
+```
+
+New users should start with the
+[10-minute walkthrough](../docs/quickstart.md). Architecture, deployment and
+operations are documented in the repository
+[documentation entry point](../docs/start-here.md).

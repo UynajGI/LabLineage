@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { importPKCS8, SignJWT } from 'jose';
+import { scopeGraphToProject } from '../project-identity.js';
 
 const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
 
@@ -325,7 +326,7 @@ export function githubEvidenceToGraph(projectId, evidence) {
       });
     }
   }
-  return { nodes, edges, evidence: evidenceRecords };
+  return scopeGraphToProject(projectId, { nodes, edges, evidence: evidenceRecords });
 }
 
 export function githubWebhookToGraph(projectId, eventName, payload) {

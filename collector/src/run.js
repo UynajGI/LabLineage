@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { assetId } from './identifiers.js';
 
 const SECRET_ARGUMENT = /(?:token|secret|password|passwd|api[_-]?key|authorization)=/i;
 
@@ -80,12 +81,75 @@ export async function captureRun({
   };
 }
 
-export function attachRunEvidence(before, after, runRecord, expectedManifest) {
+function evidenceId(runId, relation, sourceId, targetId) {
+  return `ev_${createHash('sha256')
+    .update(`${runId}\0${relation}\0${sourceId}\0${targetId}`)
+    .digest('hex')
+    .slice(0, 32)}`;
+}
+
+function argumentCandidates(command, args) {
+  const candidates = [command];
+  for (const argument of args || []) {
+    if (typeof argument !== 'string' || SECRET_ARGUMENT.test(argument)) continue;
+    if (argument.startsWith('-') && argument.includes('=')) candidates.push(argument.slice(argument.indexOf('=') + 1));
+    else if (!argument.startsWith('-')) candidates.push(argument);
+  }
+  return candidates;
+}
+
+function resolveAssetIds(root, projectKey, command, args, knownIds) {
+  if (!root || !projectKey) return new Set();
+  const resolvedRoot = path.resolve(root);
+  const ids = new Set();
+  for (const candidate of argumentCandidates(command, args)) {
+    if (!candidate || candidate.includes('\0')) continue;
+    const absolute = path.resolve(resolvedRoot, candidate);
+    const relative = path.relative(resolvedRoot, absolute);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+    const id = assetId(projectKey, relative.split(path.sep).join('/'));
+    if (knownIds.has(id)) ids.add(id);
+  }
+  return ids;
+}
+
+export function attachRunEvidence(before, after, runRecord, expectedManifest, context = {}) {
   const previous = new Map(before.records.filter((record) => record.record_type === 'asset').map((record) => [record.asset_id, record]));
   const expected = new Map((expectedManifest?.records || []).filter((record) => record.record_type === 'asset').map((record) => [record.asset_id, record]));
   const changed = after.records.filter((record) => (
-    record.record_type === 'asset' && previous.get(record.asset_id)?.content_hash !== record.content_hash
+    record.record_type === 'asset' && (
+      previous.get(record.asset_id)?.content_hash !== record.content_hash ||
+      previous.get(record.asset_id)?.modified_at !== record.modified_at
+    )
   ));
+  const changedIds = new Set(changed.map((record) => record.asset_id));
+  const assets = new Map(after.records.filter((record) => record.record_type === 'asset').map((record) => [record.asset_id, record]));
+  const explicitAssetIds = resolveAssetIds(
+    context.root,
+    context.projectKey,
+    context.command,
+    context.args,
+    new Set(assets.keys())
+  );
+  const codeIds = new Set(
+    [...explicitAssetIds].filter((id) => assets.get(id)?.asset_type === 'code')
+  );
+  const inputIds = new Map(
+    [...explicitAssetIds]
+      .filter((id) => !changedIds.has(id) && assets.get(id)?.asset_type === 'dataset')
+      .map((id) => [id, 'exact'])
+  );
+  const configIds = new Map(
+    [...explicitAssetIds]
+      .filter((id) => !changedIds.has(id) && assets.get(id)?.asset_type === 'config')
+      .map((id) => [id, 'exact'])
+  );
+  for (const edge of after.records.filter((record) => record.record_type === 'lineage_edge')) {
+    if (edge.relation_type !== 'reads_from' || !codeIds.has(edge.to_entity_id) || changedIds.has(edge.from_entity_id)) continue;
+    const source = assets.get(edge.from_entity_id);
+    if (source?.asset_type === 'config') configIds.set(source.asset_id, 'strong');
+    else if (source) inputIds.set(source.asset_id, 'strong');
+  }
   const records = after.records.map((record) => {
     if (record.record_type !== 'asset') return record;
     const expectedRecord = expected.get(record.asset_id);
@@ -94,6 +158,31 @@ export function attachRunEvidence(before, after, runRecord, expectedManifest) {
       : record;
   });
   records.push(runRecord);
+  const addEdge = (sourceId, relation, confidence) => {
+    records.push({
+      record_type: 'lineage_edge',
+      from_entity_id: sourceId,
+      to_entity_id: runRecord.run_id,
+      relation_type: relation,
+      confidence_label: confidence,
+      evidence_ids: [evidenceId(runRecord.run_id, relation, sourceId, runRecord.run_id)]
+    });
+  };
+  for (const id of [...codeIds].sort()) addEdge(id, 'executed_code', 'exact');
+  for (const record of after.records.filter((item) => item.record_type === 'code_version')) {
+    addEdge(record.asset_id, 'executed_code', 'exact');
+  }
+  for (const [id, confidence] of [...inputIds].sort(([left], [right]) => left.localeCompare(right))) {
+    addEdge(id, 'used_input', confidence);
+  }
+  for (const record of after.records.filter((item) => (
+    item.record_type === 'parameter_set' && configIds.has(item.source_asset_id)
+  ))) {
+    addEdge(record.asset_id, 'used_parameter_set', configIds.get(record.source_asset_id));
+  }
+  for (const record of after.records.filter((item) => item.record_type === 'environment')) {
+    addEdge(record.asset_id, 'captured_environment', 'exact');
+  }
   for (const output of changed) {
     const expectedRecord = expected.get(output.asset_id);
     records.push({
@@ -102,7 +191,7 @@ export function attachRunEvidence(before, after, runRecord, expectedManifest) {
       to_entity_id: output.asset_id,
       relation_type: 'generated',
       confidence_label: 'exact',
-      evidence_ids: [`ev_${runRecord.run_id}_output_${output.asset_id}`],
+      evidence_ids: [evidenceId(runRecord.run_id, 'generated', runRecord.run_id, output.asset_id)],
       expected_hash: expectedRecord?.content_hash || null,
       observed_hash: output.content_hash
     });

@@ -50,3 +50,60 @@ test('console routes have no serious or critical accessibility violations', asyn
   }
   expect(blocking, JSON.stringify(blocking, null, 2)).toEqual([]);
 });
+
+test('new user can inspect a result and its relationship evidence without clicking a graph line', async ({ page }) => {
+  await page.goto('/#/lineage');
+  await page.getByText('fig3.png', { exact: true }).click();
+
+  await expect(page.getByRole('heading', { name: 'Node Details' })).toBeVisible();
+  await expect(page.getByText('Connected relationships', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', {
+    name: 'Open generated relationship with plot_phase.py #019',
+    exact: true
+  }).click();
+
+  await expect(page.getByRole('heading', { name: 'Relation Evidence' })).toBeVisible();
+  await expect(page.getByText('Relation: generated', { exact: true })).toBeVisible();
+  await expect(page.getByText('From: run_plot_019', { exact: true })).toBeVisible();
+  await expect(page.getByText('To: figure_3', { exact: true })).toBeVisible();
+  await expect(page.getByText('ev_figure_hash', { exact: true })).toBeVisible();
+});
+
+test('operator can import a manifest through the Upload Center', async ({ page }) => {
+  const bundleId = `playwright-${Date.now()}`;
+  await page.goto('/#/upload');
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'manifest.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({
+      schema_version: 'lablineage.manifest.v1',
+      bundle_id: bundleId,
+      project_key: 'phase-transition',
+      captured_at: new Date().toISOString(),
+      records: []
+    }))
+  });
+  await page.getByRole('button', { name: 'Import Manifest' }).click();
+  await expect(page.getByText(new RegExp(`Imported 0 nodes, 0 edges and 0 evidence records from ${bundleId}`))).toBeVisible();
+});
+
+test('operator confirmation resolves a finding and records the UI transition', async ({ page }) => {
+  await page.goto('/#/findings');
+  await page.getByRole('button', { name: 'Run audit' }).click();
+  await expect(page.getByRole('button', { name: 'Run audit' })).toBeEnabled();
+  const resolveButtons = page.getByRole('button', { name: 'Resolve' });
+  const before = await resolveButtons.count();
+  expect(before).toBeGreaterThan(0);
+  page.once('dialog', (dialog) => dialog.accept());
+  await resolveButtons.first().click();
+  await expect(resolveButtons).toHaveCount(before - 1);
+});
+
+test('local handoff preview returns an immutable export identifier without sending', async ({ page }) => {
+  await page.goto('/#/handoff');
+  await page.getByRole('button', { name: 'Create local preview' }).click();
+  await expect(page.getByRole('status')).toContainText(
+    /Immutable local preview export_[a-f0-9-]+ created with 3 files\./
+  );
+});

@@ -24,7 +24,7 @@
     "test:e2e:install": "playwright install chromium",
     "seed": "npm run seed --workspace backend",
     "migrate": "npm run migrate --workspace backend",
-    "collector": "npm run start --workspace collector",
+    "collector": "node collector/src/cli.js",
     "verify:release": "node scripts/verify-release-evidence.mjs artifacts",
     "validate:workflows": "node scripts/validate-workflows.mjs",
     "hooks:install": "node scripts/install-git-hooks.mjs",

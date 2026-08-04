@@ -1,0 +1,15 @@
+{
+  "relations": [
+    "captured_environment",
+    "executed_code",
+    "generated",
+    "used_input",
+    "used_parameter_set"
+  ],
+  "sourceAssetTypes": {
+    "executed_code": "code",
+    "used_input": "dataset"
+  },
+  "outputAssetType": "figure",
+  "verified": true
+}

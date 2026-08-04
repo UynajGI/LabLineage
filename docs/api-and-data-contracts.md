@@ -45,8 +45,9 @@ GitHub 安装令牌、Collector 凭据或绝对路径。
 
 - HTTP API 当前主版本为 `/v1`。同一主版本只允许新增可选字段、端点或枚举能力；删除字段、改变含义、收紧已公开输入或改变状态码语义必须发布新主版本。
 - Manifest 当前版本为 `lablineage.manifest.v1`。JSON Schema 位于 `backend/schemas/manifest-v1.schema.json`，签名封装位于 `backend/schemas/signed-bundle-v1.schema.json`。
+- Collector、GitHub 等外部来源的 node、edge 与 evidence ID 在导入边界按项目作用域化；原始外部 ID 保存在节点 `details.externalId` 或 evidence `externalId` 中。同一个 bundle/commit/asset ID 因而可以安全地存在于多个项目，不会触发覆盖或跨项目串线。
 - `/api/version` 返回实现、API、Manifest 和 Collector 最低 Node.js 版本。
-- `/api/openapi.json` 返回 OpenAPI 3.1.1 文档。`npm run validate:openapi --workspace backend` 会用规范解析器校验文档，并确认每个实现的 `/v1` 操作均有契约；CI 对漂移失败。
+- `/api/openapi.json` 返回 OpenAPI 3.1.1 文档。`npm run validate:openapi --workspace backend` 会用规范解析器校验文档，确认每个实现的 `/v1` 操作均有契约，并拒绝缺少具体 JSON 请求或 2xx 响应 schema 的占位契约；CI 对漂移失败。
 
 ## 错误和追踪
 
@@ -78,6 +79,8 @@ GitHub 安装令牌、Collector 凭据或绝对路径。
   `POST /v1/ingestion-jobs/{jobId}/retry`，保留原 `bundle_id`、错误历史并重新排队。
 - Workspace 使用数据库中的步骤进度和幂等键恢复，不依赖单进程内存。
 - PostgreSQL `application_state` 更新在租户事务内 `FOR UPDATE`；规范化投影与状态提交属于同一事务。
+- 领域状态变更及其审计事件使用同一次事务。JSON 开发存储在副本上执行 mutator，
+  只有持久化成功才替换内存状态；校验异常既不会泄漏局部修改，也不会使后续写队列永久失败。
 
 ## Manifest 兼容
 
@@ -118,6 +121,8 @@ GitHub 安装令牌、Collector 凭据或绝对路径。
   `ifGenerationMatch=0`、CRC32C 和 SHA-256 元数据。
 - 报告读取会重新计算 SHA-256；校验不一致返回 500 并进入结构化错误日志。
   API 不暴露本地内部路径，PostgreSQL 仅投影对象 URI、generation、校验和和大小。
+- 本地交接预览要求正文确认 `CREATE_LOCAL_HANDOFF_PREVIEW`，返回 `exportId`
+  及三个不可变对象的名称/校验和/大小，不返回主机绝对路径，也不发送邮件。
 - Terraform 运行身份只有 object creator/viewer，没有 delete 权限；桶至少保留
   30 天，默认在 365 天按生命周期删除。环境的数据保留审批可以延长该周期。
 
@@ -207,3 +212,7 @@ RepositorySnapshot、evidence 与 lineage edge。原始本地路径和内部允�
 会移除这些内部引用。worker 读取对象后必须重新计算 SHA-256。成功、不可重试
 失败或验证失败会从活跃任务状态移除对象引用；底层不可变对象由批准的保留与
 生命周期策略清理，以便事件调查且不向运行身份授予删除权限。
+
+每个对象写入前先持久化 reservation，成功后记录 URI、generation、CRC32C、
+SHA-256 与大小；进程重启会恢复 pending reservation 并把缺失或校验失败标为
+failed。这样即使对象写入与后续领域事务之间中断，也能明确发现和处置残留对象。

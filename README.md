@@ -21,7 +21,15 @@ the live evaluation baseline — is maintained in the
 One-line pitch: **the model explains and interacts; deterministic services own
 facts, hashes, evidence, and R0–R4 reproducibility levels.**
 
-## Quick start
+## New here?
+
+Start with [从这里开始](docs/start-here.md). It separates the paths for researchers, auditors, administrators, operators, and developers.
+
+- [10 分钟体验](docs/quickstart.md): use seeded data; no cloud or model credentials required.
+- [接入第一个项目](docs/first-project.md): create a project, scan a safe directory, import a signed Manifest, and inspect lineage.
+- [核心术语表](docs/glossary.md): Project, Snapshot, Bundle, Evidence, Finding, and R0–R4.
+
+## Open the application
 
 Requirements: Node.js 22.15 or newer.
 
@@ -29,6 +37,17 @@ The competition demo defaults to the fully local profile. It needs no Google
 Cloud resources: the console, API, state, object store, worker, and Collector
 all run on the same computer. Google ADK is optional; deterministic scanning,
 lineage, audit, and objective assessment still complete without a model.
+
+macOS / Linux:
+
+```bash
+npm install --ignore-scripts
+cp .env.example backend/.env.local
+npm run seed
+npm run dev
+```
+
+Windows PowerShell:
 
 ```powershell
 npm install --ignore-scripts
@@ -49,6 +68,12 @@ features work without a model. Agent summaries use Google ADK and require either
 Vertex AI application-default credentials or a Gemini key in the ignored
 `backend/.env.local`. Keep secrets out of commands, logs, commits, and
 documentation; `LABLINEAGE_PROXY` is optional for local development.
+
+The machine-readable OpenAPI 3.1 contract is available at
+[http://127.0.0.1:8788/api/openapi.json](http://127.0.0.1:8788/api/openapi.json),
+and `/api/version` reports API, implementation, Manifest, and Collector runtime
+compatibility versions. CI fails if any implemented `/v1` operation is missing
+or if a write request or successful response still uses a placeholder contract.
 
 To analyze an existing project, select **Local directory**, generate a pairing
 code, and run the two commands displayed by the page. The first initializes the
@@ -133,9 +158,18 @@ External integrations remain guarded:
   creates drafts only.
 - Agent tools are bounded and read-only.
 
-See the [administrator guide](docs/administrator-guide.md) for configuration
-and the [operations runbook](docs/operations-runbook.md) for deployment,
-recovery, and incident procedures.
+Production configuration details:
+
+- Set `DATABASE_URL`, tenant settings and OIDC/JWKS settings; JSON storage is rejected in production unless explicitly overridden.
+- Run `npm run migrate` using a migration identity, then start the application with a runtime identity that has no DDL permissions.
+- Require signed manifests and configure trusted Collector SPKI fingerprints.
+- Use a read-only GitHub App installation and Workspace OAuth scopes limited to Drive files, Sheets values and Gmail drafts.
+- Allow local Git only through `LABLINEAGE_LOCAL_GIT_ROOTS`; repository evidence never exports raw file paths.
+- Build with `Dockerfile`, or use `compose.yaml` for a local PostgreSQL production-shaped environment.
+- Base images and browser dependencies are digest/version pinned; production deployment resolves the pushed Artifact Registry tag to a digest before migration or rollout.
+- Provision Artifact Registry and GitHub OIDC with Terraform, then use the protected `Deploy` workflow for staging or production.
+
+See the [documentation entry point](docs/start-here.md), [user guide](docs/user-guide.md), [administrator guide](docs/administrator-guide.md), [API and data contracts](docs/api-and-data-contracts.md), [operations runbook](docs/operations-runbook.md), [threat model](docs/threat-model.md), [dependency risk register](docs/dependency-risk-register.md), and [architecture](docs/architecture.md).
 
 ## Verification
 
@@ -151,7 +185,7 @@ Useful focused commands:
 npm run test:all
 npm run build
 npm run test:e2e
-npm audit --omit=dev --audit-level=critical
+npm audit --omit=dev --omit=optional --audit-level=critical
 ```
 
 Repository-local `pre-commit`, `commit-msg`, `pre-push`, and `post-commit`

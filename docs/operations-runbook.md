@@ -48,7 +48,7 @@ checksum。受保护环境必须配置 `STAGING_CANARY_BEARER_TOKEN`；缺少令
 ## 健康、指标与追踪
 
 - 存活检查：`GET /api/health`，无需身份令牌。
-- 就绪检查：`GET /api/ready`，会实际刷新存储；数据库不可用时返回 503。
+- 就绪检查：`GET /api/ready`，会实际刷新数据库并对对象存储执行不可变写入/读取校验；生产数据库、OIDC、租户、受信 Collector key 或对象存储配置缺失，以及 GCS 不可读写时均返回带稳定 `code`/`issues` 的 503。
 - 能力状态：`GET /v1/capabilities`，显示实际配置，不返回模拟成功。
 - Prometheus 指标：`GET /v1/metrics`，要求 `admin` 角色。
 - 每个响应携带 `x-request-id`。服务日志为单行 JSON，记录请求 ID、主体、路由、状态和耗时，不记录令牌或请求正文。
@@ -124,9 +124,10 @@ checksum。受保护环境必须配置 `STAGING_CANARY_BEARER_TOKEN`；缺少令
 2. Query `/v1/ingestion-jobs/{jobId}`. The response never exposes the durable
    payload; inspect `attempts`, `nextAttemptAt`, `leaseExpiresAt`, and the safe
    error object.
-3. If the owning process died, restart the API. Startup recovery requeues jobs
-   whose processing lease expired and resumes queued jobs from the durable
-   application state.
+3. Startup recovery and the periodic poller (`LABLINEAGE_INGESTION_POLL_MS`,
+   default 5000 ms) requeue expired processing leases and resume queued jobs
+   from durable application state; a second healthy instance therefore does
+   not depend on the failed instance restarting.
 4. If multiple instances are running, confirm their clocks and PostgreSQL
    connectivity before intervening. Do not edit a live lease by hand.
 5. Escalate if a valid job remains queued for ten minutes after recovery.
@@ -162,6 +163,8 @@ checksum。受保护环境必须配置 `STAGING_CANARY_BEARER_TOKEN`；缺少令
    身份没有删除权限；清理由 Bucket retention/lifecycle 执行。
 4. 验证失败的 Bundle 只能通过显式 `RETRY_INGESTION_JOB` 和原 `bundle_id`
    提交修正内容，新载荷使用新的不可变对象键。
+5. 检查 `objectReservations` 中的 pending/failed 项。对象写入前先登记 reservation；
+   重启恢复会按 SHA-256 核对已落盘对象，避免无记录的孤儿写入被静默忽略。
 
 ## 本地 Git 连接器
 
@@ -178,7 +181,8 @@ checksum。受保护环境必须配置 `STAGING_CANARY_BEARER_TOKEN`；缺少令
    environment；不得创建长期 GCP JSON key。
 2. staging 自动部署还需设置 `ENABLE_STAGING_DEPLOY=true`；production 只允许
    手动触发并经过 environment 审批。
-3. 工作流先更新/执行迁移 Job，再更新 Cloud Run。readiness 100 秒内不成功会
+3. 工作流推送提交标签后从 Artifact Registry 读取 `sha256`，迁移 Job 与 Cloud
+   Run 都使用 digest 引用；随后先执行迁移 Job，再更新 Cloud Run。readiness 100 秒内不成功会
    自动恢复上一个镜像。
 4. 回滚后核对迁移是否为向前兼容；数据库只能通过新的修复迁移前进，禁止回写
    或删除已应用迁移。

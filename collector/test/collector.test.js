@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { readOfflineArchive, verifyOfflineArchive, writeOfflineArchive } from '../src/archive.js';
 import { collectSnapshot, diffManifests, signManifest, verifyBundle } from '../src/collector.js';
 import { imageMetadata, parseConfig, parseLog, parseNotebook, parsePython } from '../src/parsers.js';
@@ -246,6 +247,50 @@ test('controlled run redacts secrets and verifies matching output hash', async (
   assert.equal(manifest.run_capture.verified, true);
   assert.equal(manifest.records.find((record) => record.asset_id === 'result').rerun_hash_match, true);
   assert.equal(manifest.records.find((record) => record.run_id === run.run_id).verification_status, 'verified');
+});
+
+test('reference study produces a complete evidence-backed run spine', async () => {
+  const fixtureRoot = fileURLToPath(new URL('../../examples/reference-study/', import.meta.url));
+  const golden = JSON.parse(await readFile(new URL('./fixtures/reference-study.golden.json', import.meta.url), 'utf8'));
+  const root = await mkdtemp(path.join(tmpdir(), 'lablineage-reference-'));
+  await mkdir(path.join(root, 'data'), { recursive: true });
+  await mkdir(path.join(root, 'results'), { recursive: true });
+  for (const relative of ['analysis.mjs', 'params.json', 'data/input.csv']) {
+    await writeFile(path.join(root, relative), await readFile(path.join(fixtureRoot, relative)));
+  }
+  const args = ['analysis.mjs', 'data/input.csv', 'params.json', 'results/chart.svg'];
+  await execFile(process.execPath, args, { cwd: root });
+  const options = { root, projectKey: 'reference-study', pathSalt: 'reference-test-salt' };
+  const expected = await collectSnapshot(options);
+  const before = await collectSnapshot(options);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const run = await captureRun({ root, command: process.execPath, args });
+  const after = await collectSnapshot(options);
+  const manifest = attachRunEvidence(before, after, run, expected, {
+    root,
+    projectKey: 'reference-study',
+    command: process.execPath,
+    args
+  });
+  const runEdges = manifest.records.filter((record) => (
+    record.record_type === 'lineage_edge' &&
+    (record.from_entity_id === run.run_id || record.to_entity_id === run.run_id)
+  ));
+  assert.deepEqual(
+    [...new Set(runEdges.map((edge) => edge.relation_type))].sort(),
+    golden.relations
+  );
+  assert.equal(runEdges.every((edge) => edge.evidence_ids?.length > 0), true);
+  for (const [relation, assetType] of Object.entries(golden.sourceAssetTypes)) {
+    const edge = runEdges.find((candidate) => candidate.relation_type === relation);
+    const source = manifest.records.find((record) => record.asset_id === edge.from_entity_id);
+    assert.equal(source.asset_type, assetType);
+  }
+  const generated = runEdges.find((edge) => edge.relation_type === 'generated');
+  const output = manifest.records.find((record) => record.asset_id === generated.to_entity_id);
+  assert.equal(output.asset_type, golden.outputAssetType);
+  assert.equal(manifest.run_capture.verified, golden.verified);
+  assert.equal(JSON.stringify(manifest).includes(root), false);
 });
 
 test('bundle upload retries transient responses with a stable idempotency key', async () => {

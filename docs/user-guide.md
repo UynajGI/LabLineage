@@ -3,6 +3,9 @@
 界面默认中文，右上角 **EN/中文** 可切换语言。开发环境使用本地身份；
 Google Cloud 模式必须使用 OIDC PKCE。所有写请求都带 `Idempotency-Key`，
 重复提交相同请求会安全重放，同一键配不同内容返回 `409`。
+第一次接触本项目时，先阅读[从这里开始](start-here.md)并完成[10 分钟体验](quickstart.md)。需要采集自己的目录时，再执行[接入第一个项目](first-project.md)。不熟悉的概念可查阅[核心术语表](glossary.md)。
+
+## 1. 登录与角色
 
 ## 1. 新建并自动分析项目
 
@@ -35,6 +38,13 @@ Google Cloud 模式必须使用 OIDC PKCE。所有写请求都带 `Idempotency-K
 页面会显示 Collector 在线、离线、已撤销或过期状态。怀疑凭据泄漏时立即撤销配对，
 重新配对生成新密钥；不要覆盖旧来源身份。完整命令和资源限制见
 [Collector 指南](collector-guide.md)。
+- 点击节点后，先在 **Connected relationships** 核对相邻节点、方向和 evidence
+  ID；打开一条关系后，再在 **Relation Evidence** 核对 `From`、`To`、
+  `Relation` 和 `Confidence`。
+- 实线事实来自精确哈希、签名 Manifest 或已确认的平台证据。
+- 候选关系、移动候选和历史推断必须显示为“推断”，不能冒充事实。
+- 只有审计员能够确认或拒绝候选边；每次决定都保留评论、操作者和版本历史。
+- “影响范围”用于查看某个数据或代码版本变更后可能失效的下游结果。
 
 ## 3. GitHub 仓库
 

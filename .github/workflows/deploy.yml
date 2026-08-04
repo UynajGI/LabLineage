@@ -52,7 +52,7 @@ jobs:
               exit 1
             fi
           done
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ env.DEPLOY_SHA }}
           persist-credentials: false
@@ -77,7 +77,12 @@ jobs:
           gcloud auth configure-docker "${registry}" --quiet
           docker build --pull --tag "${image}" .
           docker push "${image}"
-          echo "DEPLOY_IMAGE=${image}" >> "${GITHUB_ENV}"
+          digest="$(gcloud artifacts docker images describe "${image}" --format='value(image_summary.digest)')"
+          if [[ ! "${digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Artifact Registry did not return an immutable digest for ${image}"
+            exit 1
+          fi
+          echo "DEPLOY_IMAGE=${image%:*}@${digest}" >> "${GITHUB_ENV}"
       - name: Execute forward-only database migration job
         if: env.MIGRATION_JOB != ''
         shell: bash
