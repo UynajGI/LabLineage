@@ -23,11 +23,11 @@ facts, hashes, evidence, and R0–R4 reproducibility levels.**
 
 ## New here?
 
-Start with [从这里开始](docs/start-here.md). It separates the paths for researchers, auditors, administrators, operators, and developers.
+Start with [Start-here](docs/start-here.md). It separates the paths for researchers, auditors, administrators, operators, and developers.
 
-- [10 分钟体验](docs/quickstart.md): use seeded data; no cloud or model credentials required.
-- [接入第一个项目](docs/first-project.md): create a project, scan a safe directory, import a signed Manifest, and inspect lineage.
-- [核心术语表](docs/glossary.md): Project, Snapshot, Bundle, Evidence, Finding, and R0–R4.
+- [10 minutes quick stark](docs/quickstart.md): use seeded data; no cloud or model credentials required.
+- [Load first project](docs/first-project.md): create a project, scan a safe directory, import a signed Manifest, and inspect lineage.
+- [Glossary](docs/glossary.md): Project, Snapshot, Bundle, Evidence, Finding, and R0–R4.
 
 ## Open the application
 
